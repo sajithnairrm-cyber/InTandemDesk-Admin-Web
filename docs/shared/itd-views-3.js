@@ -777,5 +777,22 @@
   document.addEventListener('DOMContentLoaded', toggleFab);
   setTimeout(toggleFab, 600);
   $('#fabNewProject')?.addEventListener('click', () => project.openNew());
+
+  /* ── Command palette verbs owned by this file ──────────────────────
+     Registered here rather than in the palette, so a module and its
+     commands stay together. Each navigates first, because both actions
+     open a form that only exists once the page has mounted. */
+  if (App.Command) {
+    App.Command.register({
+      id: 'project.new', label: 'New project', keywords: 'create add project',
+      group: 'Create', icon: 'fa-diagram-project', hint: 'Create a project',
+      run: () => { location.hash = '#/projects'; App.render(); setTimeout(() => project.openNew(), 30); }
+    });
+    App.Command.register({
+      id: 'payment.new', label: 'Record payment', keywords: 'create add payment invoice receipt money',
+      group: 'Create', icon: 'fa-indian-rupee-sign', hint: 'Log a client payment',
+      run: () => { location.hash = '#/payments'; App.render(); setTimeout(() => payments.openAdd(), 30); }
+    });
+  }
 })(window.App);
 

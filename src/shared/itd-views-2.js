@@ -551,6 +551,26 @@
   App.staffById = id => STAFF.find(s => s.id === id);
   App.staffTxns = staffTxns;
 
+  /* ── Command palette verbs owned by this file ────────────────────── */
+  if (App.Command) {
+    App.Command.register({
+      id: 'member.new', label: 'Add member', keywords: 'staff owner user login access invite',
+      group: 'Create', icon: 'fa-user-plus', hint: 'Grant a Google account access',
+      when: () => !App.Roles || App.Roles.can.createMember(),
+      run: () => { location.hash = '#/staff'; App.render(); setTimeout(() => staff.fbForm(null), 30); }
+    });
+    App.Command.register({
+      id: 'report.export', label: 'Export data as JSON', keywords: 'download backup export data',
+      group: 'App', icon: 'fa-download', hint: 'Full parsed dataset', primary: false,
+      run: () => {
+        const blob = new Blob([JSON.stringify(D, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'intandem-desk-data.json'; a.click();
+        URL.revokeObjectURL(url); App.toast('Export ready', 'intandem-desk-data.json downloaded.', 'good');
+      }
+    });
+  }
+
   /* ── REPORTS ──────────────────────────────────────────── */
   const reports = {
     mount() {

@@ -362,6 +362,9 @@ window.App = (function () {
   function initSearch() {
     buildSearchIndex();
     const input = $('#searchInput'), panel = $('#searchPanel');
+    /* Shells are free to omit the topbar field entirely — the mobile app
+       goes straight to the command palette from its search button. */
+    if (!input || !panel) return;
     const close = () => { panel.hidden = true; panel.innerHTML = ''; };
     const draw = q => {
       q = q.trim().toLowerCase();
@@ -376,6 +379,15 @@ window.App = (function () {
       ).join('');
       panel.hidden = false;
     };
+    /* The topbar field is now a doorway to the command palette rather than
+       a second search implementation. It looks identical; focusing it opens
+       the palette, which can act as well as navigate. */
+    if (App.Command) {
+      input.addEventListener('focus', () => { input.blur(); App.Command.open(input.value); });
+      input.addEventListener('click', () => App.Command.open(input.value));
+      return;
+    }
+
     input.addEventListener('input', e => draw(e.target.value));
     input.addEventListener('focus', e => { if (e.target.value) draw(e.target.value); });
     panel.addEventListener('click', e => { const r = e.target.closest('.search__row'); if (!r) return; location.hash = r.dataset.route; input.value = ''; close(); });
@@ -440,6 +452,9 @@ window.App = (function () {
     money, percent, shortDate, monthLabel, monthKey, fromNow, inr, esc, safeUrl,
     empty, emptyChart, emptyRow, pctOf,
     store, toast, modal, closeModal, statusClass, buildSearchIndex,
+    /* Read access to the search index, so the command palette can search
+       the same records the topbar does without a second implementation. */
+    searchIndex: () => searchIndex,
     Store, notif: notifApi, catIcon, SEED_PROJECTS,
     APP, isAdminApp
   };
