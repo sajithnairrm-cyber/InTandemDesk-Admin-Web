@@ -22,11 +22,11 @@ const NAME = 'InTandem Desk · Admin Web';
 const PORT = 8080;
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const base = path.join(ROOT, 'public');
+const base = path.join(ROOT, 'docs');
 const port = Number(process.argv[2]) || PORT;
 
 if (!fs.existsSync(base)) {
-  console.error('\n  public/ does not exist. Run:  npm run build\n');
+  console.error('\n  docs/ does not exist. Run:  npm run build\n');
   process.exit(1);
 }
 

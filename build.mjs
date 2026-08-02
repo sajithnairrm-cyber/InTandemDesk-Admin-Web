@@ -21,7 +21,7 @@ const ROOT   = path.dirname(fileURLToPath(import.meta.url));
 const SRC    = path.join(ROOT, 'src');
 const SHARED = path.join(SRC, 'shared');
 const APP    = path.join(SRC, 'app');
-const OUT    = path.join(ROOT, 'public');
+const OUT    = path.join(ROOT, 'docs');
 
 const preview = process.argv.includes('--preview');
 
@@ -54,5 +54,5 @@ const app = copyDir(APP, OUT);
 const shared = copyDir(SHARED, path.join(OUT, 'shared'));
 
 console.log(`\n  InTandem Desk · Admin Web${preview ? '  (PREVIEW — unconfigured)' : ''}`);
-console.log(`  ${app} app + ${shared} shared files → public/\n`);
+console.log(`  ${app} app + ${shared} shared files → docs/\n`);
 if (preview) console.log('  ⚠  Sign-in will show "Setup required". Do not deploy this.\n');
