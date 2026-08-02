@@ -18,20 +18,31 @@ Needs Node 18+. No dependencies to install.
 npm run dev
 ```
 
-<http://localhost:8080>
+**This is the whole local setup in one command.** It syncs the shared core to
+the mobile repo, builds both apps, serves both, then watches for changes and
+repeats — so editing here keeps the mobile app in step automatically.
 
-On localhost the app **opens straight away** — no Google sign-in — with an
-amber banner at the bottom saying so. That is a development convenience; see
+| | |
+|---|---|
+| 💻 Web | http://localhost:8080 |
+| 📱 Mobile | http://localhost:8081 |
+
+It also prints your Wi-Fi address so you can open the mobile app **on a real
+phone** — e.g. `http://192.168.1.7:8081`. Test the mobile UI there, not in a
+desktop emulator: touch targets, momentum scrolling and the iOS safe area only
+behave honestly on a device.
+
+Both apps open straight past the login gate with an amber banner. See
 [Authentication](#authentication).
 
 Other commands:
 
 ```bash
-npm run build     # src/ → public/
-npm run serve     # serve public/ without rebuilding
+npm run dev:web    # web only, no mobile
+npm run build      # src/ -> docs/ once
+npm run serve      # serve docs/ without building
+npm run ship "…"   # build, commit and push BOTH repos
 ```
-
----
 
 ## Layout
 
@@ -45,16 +56,17 @@ src/
 │   ├── itd-core.js         registry · router · helpers · Derive · Store
 │   ├── itd-roles.js        Owner/Staff roles and permissions
 │   ├── itd-auth-settings.js
-│   └── itd-views-1..3.js   all eleven views
+│   ├── itd-views-1..3.js   all eleven views
+│   └── itd-admin-auth.js   auth gate + local dev bypass
 └── app/         ← this app only
-    ├── index.html          desktop shell: sidebar, full topbar
-    └── itd-admin-auth.js   auth gate + local dev bypass
-public/          build output — generated, gitignored
-docs/            architecture, roles spec, firestore.rules (reference)
+    └── index.html          desktop shell: sidebar, full topbar
+docs/            build output — COMMITTED, served by GitHub Pages
+documentation/   architecture, roles spec, firestore.rules
 ```
 
-`build.mjs` copies `src/app/` and `src/shared/` into `public/`. That is the
-whole build — a file copy, no bundler, no dependencies.
+`build.mjs` copies `src/app/` and `src/shared/` into `docs/`. That is the
+whole build — a file copy, no bundler, no dependencies. It outputs to `docs/`
+because GitHub Pages can only publish from the repo root or `/docs`.
 
 ---
 
@@ -85,12 +97,16 @@ no signed-in identity to attribute them to.
 
 ## The shared-core rule
 
-`src/shared/` is duplicated in `InTandemDesk-Admin-Mobile`. **Two copies in two
-repositories will drift** — it already happened once in this project, where a
-dead function and an orphaned handler survived for weeks in a forked file.
+`src/shared/` (11 files) is duplicated in `InTandemDesk-Admin-Mobile`. **Two copies in two
+repositories will drift** — it already happened twice in one day with
+`itd-admin-auth.js`, which is why that file now lives in `shared/` rather
+than `app/`.
 
-The repositories have no build or runtime dependency on each other. This is an
-*optional* maintenance aid, run by hand:
+`npm run dev` removes the problem while you work: every save to
+`src/shared/` is mirrored to the mobile repo and both apps rebuild. You do not
+run a sync command.
+
+Manual commands, if the watcher is not running:
 
 ```bash
 npm run check:shared     # do the two repos agree?
@@ -98,7 +114,7 @@ npm run sync:push        # this repo wins
 npm run sync:pull        # the other repo wins
 ```
 
-It expects the two repos cloned as siblings:
+Both repositories must be cloned as siblings:
 
 ```
 some-folder/
@@ -106,33 +122,33 @@ some-folder/
 └── InTandemDesk-Admin-Mobile/
 ```
 
-If they are not siblings, the command exits with a message and nothing else is
-affected. `src/app/` is never synced — that is where the two portals are meant
-to differ.
+`src/app/` is never synced — that is where the two portals are meant to differ:
 
-**After editing anything in `src/shared/`: push to the other repo, commit both.**
+| | `src/app/` holds |
+|---|---|
+| Web | `index.html` |
+| Mobile | `index.html`, `itd-mobile.css`, `itd-mobile-nav.js` |
 
----
+**Committing is still manual.** Files staying in sync does not commit them —
+if the mobile repo is never pushed, GitHub Pages keeps serving the old build.
+`npm run ship "message"` in the web repo commits and pushes both together.
 
-## Pushing to GitHub
+## Committing
 
-```bash
-git init
-```
-
-```bash
-git add . && git commit -m "Initial commit — Admin/Owner web portal"
-```
+Both repos are already on GitHub. From the **web** repo:
 
 ```bash
-git remote add origin https://github.com/<you>/InTandemDesk-Admin-Web.git
+npm run ship "what changed"
 ```
 
-```bash
-git push -u origin main
-```
+That builds both, then commits and pushes both with the same message —
+skipping either if it has nothing to commit. Use plain `git` if you'd rather
+handle them separately.
 
-`public/` is gitignored — it is generated.
+`docs/` **is committed** — GitHub Pages serves the app from it. `npm run build`
+regenerates it; never edit it by hand.
+
+Repo: <https://github.com/sajithnairrm-cyber/InTandemDesk-Admin-Web>
 
 ---
 

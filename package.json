@@ -8,7 +8,9 @@
     "node": ">=18"
   },
   "scripts": {
-    "dev": "node build.mjs --preview && node serve.mjs",
+    "dev": "node dev.mjs",
+    "dev:web": "node dev.mjs --no-mobile",
+    "ship": "node ship.mjs",
     "build": "node build.mjs --preview",
     "serve": "node serve.mjs",
     "check:shared": "node sync-shared.mjs check ../InTandemDesk-Admin-Mobile",

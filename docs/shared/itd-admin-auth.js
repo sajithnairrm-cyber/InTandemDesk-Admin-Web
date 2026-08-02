@@ -51,11 +51,23 @@ window.__itdAuthUp = true;
 
      A banner is always visible while it is active, so nobody mistakes
      a bypassed session for a real one. Add ?auth to the URL to
-     exercise the genuine sign-in flow locally. */
-  const LOCAL_HOSTS = ['localhost', '127.0.0.1', '::1', ''];
-  const IS_LOCAL    = LOCAL_HOSTS.includes(location.hostname);
-  const FORCE_AUTH  = new URLSearchParams(location.search).has('auth');
-  const DEV_BYPASS  = IS_LOCAL && !FORCE_AUTH;
+     exercise the genuine sign-in flow locally.
+
+     Private LAN addresses count as local too, so you can open the app on
+     a real phone over Wi-Fi. Every pattern below is non-routable on the
+     public internet — RFC 1918 ranges, loopback, and mDNS .local names —
+     so a hostile site can never present one of these to a browser. */
+  function isLocalHostname(h) {
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === ''
+      || /^192\.168\.\d{1,3}\.\d{1,3}$/.test(h)                  // 192.168.0.0/16
+      || /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)               // 10.0.0.0/8
+      || /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(h)   // 172.16.0.0/12
+      || /\.local$/.test(h);                                     // mDNS
+  }
+
+  const IS_LOCAL   = isLocalHostname(location.hostname);
+  const FORCE_AUTH = new URLSearchParams(location.search).has('auth');
+  const DEV_BYPASS = IS_LOCAL && !FORCE_AUTH;
 
   if (DEV_BYPASS) {
     startDevMode();
