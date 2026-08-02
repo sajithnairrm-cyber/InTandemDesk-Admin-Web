@@ -1,0 +1,16 @@
+# Build output — regenerate with `npm run build`
+/public/
+
+# Firebase CLI
+.firebase/
+firebase-debug.log
+firestore-debug.log
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+*.swp
+.DS_Store
+
+node_modules/

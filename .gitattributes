@@ -1,0 +1,8 @@
+# Normalise line endings so the shared-core checksum comparison in
+# sync-shared.mjs stays valid across machines. Without this, a clone on
+# Windows and a clone on macOS produce different SHA-256 hashes for
+# identical files and `npm run check:shared` reports phantom drift.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

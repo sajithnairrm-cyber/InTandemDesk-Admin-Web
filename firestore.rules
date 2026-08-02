@@ -1,0 +1,78 @@
+rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════════
+// InTandem Desk — Firestore security rules
+//
+// THIS FILE IS THE SOURCE OF TRUTH FOR WHO IS AN ADMINISTRATOR.
+// The admin console does not keep its own list. It decides whether
+// you are an admin by attempting to read the whole `staff`
+// collection — a read only isAdmin() below can perform. Editing the
+// client cannot get anyone past that, because the answer comes from
+// the server.
+//
+// Deploy:  firebase deploy --only firestore:rules
+// ═══════════════════════════════════════════════════════════════════
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // ── ADMINISTRATORS ────────────────────────────────────────────
+    // Every administrator's Google account email. These accounts can
+    // open the admin console and manage staff logins. To add or
+    // remove an admin, edit this list and re-publish the rules —
+    // no code change and no redeploy of the app is needed.
+    //
+    // ⚠ Put YOUR real email here before the first deploy, or you
+    //   will be locked out of your own console.
+    function isAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        request.auth.token.email in [
+          'sajithnair.rm@gmail.com'
+          // , 'second.admin@intandembuild.in'
+        ];
+    }
+
+    // ── MEMBER DIRECTORY ──────────────────────────────────────────
+    // One document per member. Fields:
+    //   name, email, phone, role, jobTitle, department, status,
+    //   photo, createdAt
+    //
+    //   role     — PERMISSION: "Owner" | "Staff". Nothing else.
+    //   jobTitle — job description ("Site Engineer"). Grants nothing.
+    //   status   — "Active" | "Inactive" | "Blocked".
+    //
+    // ⚠️ NOT YET DEPLOYED. Publish with:
+    //      firebase deploy --only firestore:rules
+    //    Until then the Owner/Staff restrictions exist only in the UI
+    //    and can be bypassed from a browser console.
+    //
+    // ⚠️ A rule cannot look up the caller's own role while documents use
+    //    auto-IDs — get() needs a known path. Owner-vs-Staff is therefore
+    //    enforced in the UI only; the server check below is isAdmin().
+    //    Re-keying documents by lowercased email closes this gap — see
+    //    docs/ROLES-AND-APPROVALS.md §4.
+    match /staff/{docId} {
+
+      // A signed-in member may read ONLY their own document, matched on
+      // their Google email. Admins may read all documents — which is
+      // also what the console's admin probe relies on.
+      allow read: if isAdmin()
+        || (isSignedIn() && request.auth.token.email == resource.data.email);
+
+      // Only admins may add, edit or remove members. This is what stops
+      // a member writing role:"Owner" onto their own record — self-
+      // promotion is impossible on the server no matter what the UI does.
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ── EVERYTHING ELSE IS LOCKED ─────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

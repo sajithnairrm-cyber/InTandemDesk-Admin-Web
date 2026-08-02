@@ -1,0 +1,56 @@
+/* ── Firebase auth: login gate, admin panel, user chip ──────────── */
+#authGate{position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; padding:1.2rem;
+  background:radial-gradient(130% 130% at 50% -10%, var(--surface) 0%, var(--bg) 60%);}
+#authGate[hidden]{display:none!important}
+.authcard{width:100%; max-width:392px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r-lg);
+  box-shadow:var(--shadow-lift); padding:2.3rem 1.9rem 1.9rem; text-align:center; animation:authin .35s var(--ease)}
+@keyframes authin{from{opacity:0; transform:translateY(8px)}to{opacity:1; transform:none}}
+.authcard__mark{width:54px; height:54px; margin:0 auto 1.05rem; border-radius:15px; display:grid; place-items:center;
+  background:var(--accent); color:var(--accent-ink); font-family:var(--display); font-weight:800; font-size:21px; letter-spacing:.5px}
+.authcard__mark i{font-size:22px}
+.authcard h1{font-family:var(--display); font-size:1.35rem; margin:0 0 .35rem; color:var(--ink)}
+.authcard__sub{color:var(--muted); font-size:13.5px; margin:0 0 1.55rem; line-height:1.55}
+.gbtn{display:inline-flex; align-items:center; justify-content:center; gap:.7rem; width:100%; padding:.82rem 1rem;
+  border-radius:var(--r-md); border:1px solid var(--line); background:var(--raise); color:var(--ink);
+  font-size:14.5px; font-weight:600; cursor:pointer; transition:filter .15s, transform .12s; font-family:var(--body)}
+.gbtn:hover{filter:brightness(1.09); transform:translateY(-1px)}
+.gbtn__g{width:18px; height:18px; flex:none}
+.authspin{width:36px; height:36px; margin:0 auto 1.15rem; border:3px solid var(--line); border-top-color:var(--accent);
+  border-radius:50%; animation:aspin .8s linear infinite}
+@keyframes aspin{to{transform:rotate(360deg)}}
+.authmsg{font-size:13.5px; color:var(--ink-2); line-height:1.65}
+.authcard--warn .authcard__mark{background:var(--warn); color:#fff}
+.authnote{margin-top:1.35rem; font-size:11.5px; color:var(--faint); line-height:1.55}
+.authcard code{font-family:var(--mono); font-size:11px; background:var(--bg-2); padding:1px 5px; border-radius:5px; color:var(--ink-2)}
+.authtoast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:10001; background:var(--surface);
+  border:1px solid var(--warn); color:var(--ink); padding:.7rem 1rem; border-radius:var(--r-md); box-shadow:var(--shadow-lift);
+  font-size:13px; max-width:90vw; display:none}
+.authuser{display:flex; align-items:center; gap:.5rem; padding:.24rem .5rem .24rem .3rem; border:1px solid var(--line);
+  border-radius:999px; background:var(--surface)}
+.authuser img,.authuser .authuser__ph{width:26px; height:26px; border-radius:50%; object-fit:cover}
+.authuser__ph{background:var(--accent); color:var(--accent-ink); display:grid; place-items:center; font-size:11px; font-weight:700}
+.authuser__nm{font-size:12.5px; font-weight:600; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink)}
+.authuser__out{background:none; border:0; color:var(--muted); cursor:pointer; font-size:13px; padding:2px 4px; line-height:1}
+.authuser__out:hover{color:var(--warn)}
+@media(max-width:640px){.authuser__nm{display:none}}
+/* ── Build badge ─────────────────────────────────────────────────
+   Distinguishes the two deployments at a glance. The admin console
+   and the staff app are otherwise visually identical, and confusing
+   them is an easy and expensive mistake to make. */
+.brand__tag{margin-left:.5rem; padding:2px 7px; border-radius:999px; font-family:var(--mono);
+  font-size:9.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--accent); background:var(--accent-bg); border:1px solid rgba(224,166,75,.28);
+  position:relative; top:-1px; white-space:nowrap}
+@media(max-width:640px){.brand__tag{display:none}}
+
+/* Local development banner — only ever rendered when the auth bypass
+   is active, which can only happen on localhost. */
+#devBanner{
+  position:fixed; left:0; right:0; bottom:0; z-index:2000;
+  padding:.45rem .9rem; text-align:center;
+  font-family:var(--body); font-size:11.5px; font-weight:600; letter-spacing:.02em;
+  color:var(--accent-ink); background:var(--accent);
+  box-shadow:0 -2px 12px rgba(0,0,0,.35);
+}
+#devBanner a{color:var(--accent-ink); text-decoration:underline; margin-left:.3rem}
+#devBanner i{margin-right:.35rem}

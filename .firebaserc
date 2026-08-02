@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "intandem-desk"
+  },
+  "targets": {
+    "intandem-desk": {
+      "hosting": {
+        "web": [
+          "intandem-desk"
+        ]
+      }
+    }
+  }
+}
