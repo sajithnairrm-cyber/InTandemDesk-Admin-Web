@@ -5,13 +5,14 @@ Status: **draft for review.** Nothing here is built yet.
 Decisions taken 2026-08-01:
 
 - Approval applies to **payment requests** and **material purchases**.
-- **Three tiers: Admin / Owner / Staff.**
+- **Two tiers: Admin/Owner and Staff.** Admin and Owner are the same
+  thing — one label, "Admin/Owner". An earlier draft split them; that is
+  superseded.
 - Approvals go into Firestore **before** the workbook data does.
 
 | Tier | People |
 |---|---|
-| **Admin** | Sajith |
-| **Owner** | Ramya · Vamsidhar |
+| **Admin/Owner** | Sajith · Ramya · Vamsidhar |
 | **Staff** | Anil · Vinay · Pavan · Swamy |
 
 ---
@@ -28,25 +29,42 @@ reads and decides. There is no version of this that works in `localStorage`.
 So `requests` becomes the first real Firestore collection beyond `staff`, and
 the pattern established here is the one the workbook data follows later.
 
-## 2. The three tiers
+## 2. The two tiers
 
 | Tier | Can do | Cannot do |
 |---|---|---|
-| **Admin** | Everything. Grants and revokes access, edits settings, deploys. | — |
-| **Owner** | Sees all firm money. Approves payments and material purchases. | Grant or revoke anyone's access. Change settings. |
-| **Staff** | Raises requests. Works own tasks. | See firm-wide money. Approve anything. |
+| **Admin/Owner** | Everything. All financial data, approvals, member management, settings. | — |
+| **Staff** | Raises requests. Works own tasks. | See firm-wide money. Approve anything. Manage members or settings. |
 
-The separation that matters: **Owner controls money, Admin controls access.**
-Ramya and Vamsidhar can approve a ₹5 lakh payment but cannot add a login.
-Only Sajith decides who gets in at all.
+Admin and Owner are **one tier under one label**. There is no partial
+Admin/Owner: anyone in it sees the bank balances and can add or remove
+another member.
+
+**How each tier is decided — and why this matters:**
+
+| Tier | Defined by | To change it |
+|---|---|---|
+| Admin/Owner | Email listed in `isAdmin()` in `firestore.rules` | Edit the list, then `firebase deploy --only firestore:rules` |
+| Staff | A document in `staff` with `status: "Active"` | The member panel in the app |
+
+The `role` field on a staff document records **intent**. Real Admin/Owner
+power comes from the rules email list, which nobody can edit from inside the
+app — that is what makes self-promotion impossible.
+
+Collapsing three tiers into two also removes a blocker the earlier draft
+carried: a Firestore rule cannot look up the caller's own role while documents
+use auto-IDs, so an intermediate Owner tier could only ever be enforced in the
+UI. With two tiers both are enforced server-side today, and §4 (re-keying
+documents by email) is no longer required for access control — it remains
+worth doing later to prevent duplicate-email records.
 
 ### Who is where
 
 | Person | Job title (directory) | Department | Tier |
 |---|---|---|---|
-| Sajith | — | — | **Admin** |
-| Ramya | Design & PMC Engineer | Design & PMC | **Owner** |
-| Vamsidhar | Construction Manager & Accounts Coordinator | Projects & Accounts | **Owner** |
+| Sajith | — | — | **Admin/Owner** |
+| Ramya | Design & PMC Engineer | Design & PMC | **Admin/Owner** |
+| Vamsidhar | Construction Manager & Accounts Coordinator | Projects & Accounts | **Admin/Owner** |
 | Anil Rajkumar | Site Engineer & PMC Coordinator | Site & PMC | Staff |
 | Vinay | Material & Inventory Coordinator | Procurement | Staff |
 | Pavan | Material & Inventory Coordinator | Procurement | Staff |
@@ -62,27 +80,30 @@ is raised. Revisit if that proves wrong.
 
 ## 3. Permission matrix
 
-| Area | Admin | Owner | Staff |
-|---|---|---|---|
-| Dashboard — firm rollups | ✅ | ✅ | project figures only |
-| Bank / office cash balances | ✅ view + edit | ✅ view + edit | ❌ |
-| Ledger | ✅ | ✅ | ⚠️ open — §8 |
-| Budget | ✅ view + edit | ✅ view + edit | ⚠️ open — §8 |
-| Vendors | ✅ | ✅ | view |
-| Schedule / tasks | ✅ | ✅ | own tasks |
-| **Raise** a request | ✅ | ✅ | ✅ |
-| **Approve** a request | ✅ | ✅ | ❌ |
-| See others' requests | all | all | own only |
-| **Manage staff logins** | ✅ | ❌ | ❌ |
-| **Settings / configuration** | ✅ | ❌ | ❌ |
-| Reports / CSV export | ✅ | ✅ | ⚠️ open — §8 |
-
-Only the last two rows separate Admin from Owner. Everything else is identical.
+| Area | Admin/Owner | Staff |
+|---|---|---|
+| Dashboard — firm rollups | ✅ | project figures only |
+| Bank / office cash balances | ✅ view + edit | ❌ |
+| Ledger | ✅ | ⚠️ open — §8 |
+| Budget | ✅ view + edit | ⚠️ open — §8 |
+| Vendors | ✅ | view |
+| Schedule / tasks | ✅ | own tasks |
+| **Raise** a request | ✅ | ✅ |
+| **Approve** a request | ✅ | ❌ |
+| See others' requests | all | own only |
+| **Manage staff logins** | ✅ | ❌ |
+| **Settings / configuration** | ✅ | ❌ |
+| Reports / CSV export | ✅ | ⚠️ open — §8 |
 
 ## 4. Schema change: key staff documents by email
 
-The current `staff` collection uses Firestore auto-IDs. That has to change, and
-this is the single most important technical decision in this document.
+The current `staff` collection uses Firestore auto-IDs.
+
+⚠️ **Superseded as a requirement.** With two tiers this is no longer needed for
+access control — Admin/Owner is decided by the rules email list, which needs no
+document lookup. It remains worth doing to make duplicate-email records
+structurally impossible. Treat the rest of this section as optional cleanup,
+not a blocker.
 
 **Document ID becomes the lowercased email.**
 
@@ -92,16 +113,12 @@ staff/{lowercase-email}          e.g.  staff/ramya@example.com
 
 Why this is necessary, not cosmetic:
 
-1. **Security rules can look up a person's tier.** Rules can only `get()` a
-   document at a *known* path. With auto-IDs there is no way to find "the staff
-   document for the signed-in user" from inside a rule. With the email as the
-   ID, `get(/databases/$(db)/documents/staff/$(request.auth.token.email))`
-   resolves directly. Without this, an Owner tier cannot be enforced server-side
-   at all — it could only be faked in the UI, which is not security.
-2. **Duplicates become impossible.** Today two documents can carry the same
+1. **Duplicates become impossible.** Today two documents can carry the same
    email, with undefined behaviour at sign-in. Email-as-ID makes that a
    structural impossibility.
-3. **The staff app gets simpler** — a direct document read instead of a query.
+2. **The staff app gets simpler** — a direct document read instead of a query.
+3. **A future third tier becomes possible** without a migration, should one ever
+   be wanted.
 
 Cost: changing someone's email means delete-and-recreate. Acceptable, and rare.
 
@@ -114,21 +131,19 @@ staff/{lowercase-email}
   phone         string
   department    string     // "Design & PMC"
   jobTitle      string     // "Design & PMC Engineer"  ← was `role`
-  accessLevel   "Admin" | "Owner" | "Staff"            ← NEW, permission-bearing
+  role          "Owner" | "Staff"                     ← permission-bearing
   status        "Active" | "Inactive" | "Blocked"
   photo         string
   createdAt     timestamp
 ```
 
-⚠️ **`role` is renamed to `jobTitle`.** The existing `role` field holds a job
-description ("Design & PMC Engineer") and is displayed on staff cards. Leaving
-a permission field next to it under a near-identical name is how access-control
-bugs get written. `accessLevel` is the only field that grants anything.
+⚠️ **The old `role` job-title field is now `jobTitle`.** `role` holds the
+permission — "Owner" or "Staff" — and nothing else. A job description sitting
+next to a permission field under a near-identical name is how access-control
+bugs get written.
 
-**Sajith gets a staff document too**, with `accessLevel: "Admin"`. That keeps
-the UI uniform — every signed-in person has a document describing them. The
-`isAdmin()` email list in the rules remains the *authoritative* check for
-admin-only writes; the field only drives what the interface shows.
+`role` records **intent**. The `isAdmin()` email list in the rules remains the
+*authoritative* check; the field drives what the interface shows.
 
 ## 5. Security rules (design)
 
@@ -140,7 +155,10 @@ function isSignedIn() { return request.auth != null; }
 function isAdmin() {
   return isSignedIn()
     && request.auth.token.email_verified == true
-    && request.auth.token.email in ['sajithnair.rm@gmail.com'];
+    && request.auth.token.email in [
+         'sajithnair.rm@gmail.com',
+         'ramya.chalumuri92@gmail.com'
+       ];
 }
 
 function me() {
@@ -151,9 +169,9 @@ function isActive() {
     && exists(/databases/$(database)/documents/staff/$(request.auth.token.email))
     && me().status == 'Active';
 }
-function isOwner() {
-  return isAdmin() || (isActive() && me().accessLevel in ['Owner', 'Admin']);
-}
+// With two tiers this is simply isAdmin(). Kept as a named function so a
+// future third tier is a one-line change here rather than everywhere.
+function isOwner() { return isAdmin(); }
 
 match /staff/{email} {
   // Anyone active may read the directory. Only Admin may change it.
@@ -260,13 +278,13 @@ money lives.
 
 - Gate admits **Admin or Owner**. The current capability probe (reading the
   whole `staff` collection) no longer distinguishes them, since Owners can read
-  the directory too. Replace it with: read own `staff` document → `accessLevel`.
+  the directory too. With two tiers this no longer matters — Admin/Owner is the rules email list, and the gate already proves membership of it.
 - The **Staff login access** panel becomes Admin-only — hidden for Owners.
 - **Settings** becomes Admin-only.
 - The gate's rejection copy needs a third case: signed in, active, but Staff →
   "use the staff app", not "not an administrator".
 - Existing staff documents must be **migrated to email-keyed IDs** with
-  `role` → `jobTitle` and a new `accessLevel`. The collection is currently
+  `role` → `jobTitle`, with `role` becoming the permission field. The collection is currently
   empty, so doing this now costs nothing. **Doing it later costs a migration.**
 
 ## 8. Open questions — business decisions, not code
@@ -288,7 +306,7 @@ money lives.
 
 | Phase | Deliverable | Notes |
 |---|---|---|
-| **1** | `staff` schema change + `accessLevel` + rules | Collection is empty — do it now, free |
+| **1** | `staff` schema: `role` = permission, `jobTitle` = job | Collection is empty — do it now, free |
 | **2** | Admin console gate admits Owners; login panel Admin-only | Re-test all three tiers |
 | **3** | `requests` collection + rules | Testable by seeding documents by hand |
 | **4** | Owner approval queue in the console | Usable before the staff app exists |

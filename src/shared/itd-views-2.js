@@ -472,7 +472,8 @@
             <select id="fsRoleSel" ${roleLocked ? 'disabled' : ''}>${R.options(rec.role)}</select>
             <em class="field__err" id="fsRoleSelErr"></em>
             ${roleLocked ? `<em class="faint" style="font-size:11.5px;font-style:normal">${esc(R.reason('setRole', rec))}</em>`
-              : `<em class="faint" style="font-size:11.5px;font-style:normal">Owner has full access including settings and member management. Staff does not.</em>`}
+              : `<em class="faint" style="font-size:11.5px;font-style:normal">Admin/Owner has full access — settings, members, all financial data. Staff does not.<br>
+                 Setting someone to Owner here records the intent; their access only becomes real once their email is added to <code>isAdmin()</code> in <code>firestore.rules</code> and the rules are published.</em>`}
           </label>
           <div class="formrow">${F('fsJob', 'Job title', rec.jobTitle, 'e.g. Site Engineer')}${F('fsDept', 'Department', rec.department || rec.dept, 'e.g. Projects')}</div>
           ${F('fsPhone', 'Phone', rec.phone, '+91…', 'tel')}
