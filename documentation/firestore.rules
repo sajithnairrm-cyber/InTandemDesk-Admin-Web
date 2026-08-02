@@ -32,7 +32,8 @@ service cloud.firestore {
       return isSignedIn() &&
         request.auth.token.email_verified == true &&
         request.auth.token.email in [
-          'sajithnair.rm@gmail.com'
+          'sajithnair.rm@gmail.com',
+          'ramya.chalumuri92@gmail.com'
           // , 'second.admin@intandembuild.in'
         ];
     }
