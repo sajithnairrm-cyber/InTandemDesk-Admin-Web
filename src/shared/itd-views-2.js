@@ -192,7 +192,9 @@
 
      `match` is the list of lowercase strings used to link a person to
      ledger rows where their name appears. */
-  const STAFF = [];
+  /* Empty on a first run. window.ITD_STAFF_SEED is set only by the demo
+     data module; the shipped app has no staff until Firestore provides them. */
+  const STAFF = window.ITD_STAFF_SEED || [];
   const staffProjects = id => App.Store.projects().filter(p => (p.staff || []).includes(id));
   const staffTasks = id => { const out = []; App.Store.projects().forEach(p => App.Store.tasks(p.id).forEach(t => { if (t.assignee === id) out.push({ ...t, project: p.name, projectId: p.id }); })); return out; };
   const availBadge = a => `<span class="badge ${a === 'Available' ? 'ok' : a === 'Busy' ? 'busy' : ''}"><i class="fa-solid fa-circle" style="font-size:6px"></i> ${esc(a || 'Available')}</span>`;
@@ -554,6 +556,13 @@
   /* ── Command palette verbs owned by this file ────────────────────── */
   if (App.Command) {
     App.Command.register({
+      id: 'demo.toggle',
+      label: 'Toggle demo data',
+      keywords: 'demo sample test fake seed data load clear',
+      group: 'App', icon: 'fa-flask', hint: 'Three sample projects, on or off', primary: false,
+      run: () => { if (!window.ITDDemo) return; window.ITDDemo.isOn ? window.ITDDemo.clear() : window.ITDDemo.load(); }
+    });
+    App.Command.register({
       id: 'member.new', label: 'Add member', keywords: 'staff owner user login access invite',
       group: 'Create', icon: 'fa-user-plus', hint: 'Grant a Google account access',
       when: () => !App.Roles || App.Roles.can.createMember(),
@@ -672,6 +681,7 @@
         return;
       }
       const theme = document.documentElement.dataset.theme;
+      const demoOn = !!(window.ITDDemo && window.ITDDemo.isOn);
       $('#page-settings').innerHTML = `
         <div class="phead"><div><p class="eyebrow">Configuration</p><h1>Settings</h1>
           <p class="phead__sub">Preferences are saved to this browser (localStorage prefix <code class="num">itd.</code>)</p></div></div>
@@ -693,6 +703,16 @@
             <div class="card__body">
               <p class="muted" style="font-size:13px; margin:0 0 .8rem">Exports the full parsed <b>DATA</b> object (budget, schedule, vendors, ledger, extra works) as JSON — the same data driving every screen.</p>
               <button class="btn btn--accent" id="exportBtn"><i class="fa-solid fa-download"></i> Export data.json</button>
+            </div>
+          </div>
+          <div class="card"><div class="card__head"><div><h2>Demo data</h2><p class="sub">Sample records for testing</p></div></div>
+            <div class="card__body">
+              <p class="muted" style="font-size:13px; margin:0 0 .8rem">Loads three projects with a full workbook, staff, tasks, payments and activity, so every module has something to show. Clearly fake, and removable in one click.</p>
+              <button class="btn ${demoOn ? 'btn--ghost' : 'btn--accent'}" id="demoBtn">
+                <i class="fa-solid ${demoOn ? 'fa-trash' : 'fa-flask'}"></i>
+                ${demoOn ? 'Clear demo data' : 'Load demo data'}
+              </button>
+              ${demoOn ? '<p class="faint" style="font-size:12px;margin:.7rem 0 0">Demo data is active. The page reloads when you clear it.</p>' : ''}
             </div>
           </div>
           <div class="card"><div class="card__head"><div><h2>Reset</h2><p class="sub">Clear saved preferences</p></div></div>
@@ -725,6 +745,10 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a'); a.href = url; a.download = 'intandem-desk-data.json'; a.click();
         URL.revokeObjectURL(url); App.toast('Export ready', 'intandem-desk-data.json downloaded.', 'good');
+      });
+      $('#demoBtn')?.addEventListener('click', () => {
+        if (!window.ITDDemo) return;
+        if (window.ITDDemo.isOn) window.ITDDemo.clear(); else window.ITDDemo.load();
       });
       $('#resetBtn').addEventListener('click', () => {
         Object.keys(localStorage).filter(k => k.startsWith('itd.')).forEach(k => localStorage.removeItem(k));
