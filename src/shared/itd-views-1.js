@@ -199,46 +199,183 @@
   };
   App.register('dashboard', dashboard);
 
-  /* ── SCHEDULE ─────────────────────────────────────────── */
-  const schedule = {
+  /* ── PROJECT SCHEDULE ──────────────────────────────────────────────
+     Was a standalone top-level module. A schedule belongs to a project,
+     not to the application, so this is now a view the Projects module
+     mounts inside a project workspace.
+
+     Nothing was thrown away: the area grouping, status chips and work-item
+     rows below are the original renderer, re-pointed at project-scoped
+     data. Reached at #/projects/<id>?tab=schedule.
+
+     DATA SOURCE, in order:
+       1. Store.schedule(projectId)  — per-project, the future
+       2. window.DATA.schedule       — the imported workbook, but only
+                                       for the project it belongs to, so
+                                       existing data survives the move
+                                       until it is migrated properly.  */
+  const projectSchedule = {
     filter: null,
-    mount() {
-      if (!D.schedule.length) {
-        $('#page-schedule').innerHTML = `
-          <div class="phead"><div><p class="eyebrow">Work schedule</p><h1>Schedule of works</h1>
-            <p class="phead__sub">No tasks scheduled</p></div></div>
-          ${App.empty('No work schedule created.', { icon: 'fa-list-check', hint: 'Tasks, areas and their status will appear here once a project schedule is added.' })}`;
+    pid: null,
+
+    /** Work items belonging to this project, and nothing from any other. */
+    items(p) {
+      const own = App.Store.schedule(p.id);
+      if (own.length) return own;
+      const m = D.meta || {};
+      if (m.project && p.name === m.project) return D.schedule;   // the workbook engagement
+      return [];
+    },
+
+    /** Areas present in THIS project's items, with progress. */
+    areasFor(items) {
+      const codes = [...new Set(items.map(t => t.area).filter(Boolean))];
+      const named = {}; D.areas.forEach(a => (named[a.code] = a.name));
+      return codes.map(code => {
+        const tasks = items.filter(t => t.area === code);
+        const done = tasks.filter(t => t.status === 'Completed').length;
+        return {
+          code, name: named[code] || (tasks[0] && tasks[0].areaName) || '',
+          total: tasks.length, done, pct: tasks.length ? Math.round(done / tasks.length * 100) : 0
+        };
+      });
+    },
+
+    /* ── Timeline ────────────────────────────────────────────────────
+       Planned dates live on the project record; a revised completion is
+       schedule-specific and stored per project. */
+    timeline(p, items) {
+      const meta = App.Store.schedMeta(p.id);
+      const start = meta.start || p.start || '';
+      const planned = meta.planned || p.due || '';
+      const revised = meta.revised || '';
+      const target = revised || planned;
+
+      const done = items.filter(t => t.status === 'Completed').length;
+      const pct = items.length ? Math.round(done / items.length * 100)
+                               : (typeof p.completion === 'number' ? p.completion : 0);
+
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const end = target ? new Date(target) : null;
+      const days = end ? Math.round((end - today) / 86400000) : null;
+
+      /* Delayed when the revised date is later than the plan, or the
+         target has passed with work outstanding. */
+      const slipped = revised && planned && revised > planned;
+      const overdue = end && days < 0 && pct < 100;
+      const state = pct >= 100 ? { cls: 'completed', t: 'Completed' }
+        : overdue ? { cls: 'due', t: 'Overdue' }
+        : slipped ? { cls: 'part', t: 'Delayed' }
+        : { cls: 'progress', t: 'On track' };
+
+      const cell = (label, value, extra) =>
+        `<div><dt>${label}</dt><dd${extra || ''}>${value}</dd></div>`;
+
+      return `<div class="card mb">
+        <div class="card__head">
+          <div><h2>Timeline</h2><p class="sub">Planned against actual</p></div>
+          <span class="pill ${state.cls}">${state.t}</span>
+        </div>
+        <div class="card__body">
+          <dl class="deflist">
+            ${cell('Project start', start ? shortDate(start) : '<span class="faint">Not set</span>')}
+            ${cell('Planned completion', planned ? shortDate(planned) : '<span class="faint">Not set</span>')}
+            ${cell('Revised completion', revised
+              ? `<span style="color:var(--warn)">${shortDate(revised)}</span>`
+              : '<span class="faint">None</span>')}
+            ${cell('Days remaining', days == null ? '<span class="faint">—</span>'
+              : days < 0 ? `<span style="color:var(--warn)">${Math.abs(days)} days overdue</span>`
+              : `${days} days`)}
+            ${cell('Progress', `${pct}%`)}
+          </dl>
+          <div style="margin-top:.9rem">${settleBar(pct, 100, { legend: false })}</div>
+          <button class="btn btn--ghost btn--sm" id="schedDates" style="margin-top:1rem">
+            <i class="fa-solid fa-calendar-days"></i> Edit dates
+          </button>
+        </div>
+      </div>`;
+    },
+
+    /** Render into the project workspace tab. */
+    render(p, host) {
+      this.pid = p.id;
+      this.filter = null;
+      const items = this.items(p);
+
+      if (!items.length) {
+        host.innerHTML = this.timeline(p, items) + App.empty('No work schedule for this project.', {
+          icon: 'fa-list-check',
+          hint: 'Work items, areas and their status appear here once this project has a schedule.'
+        });
+        this.bindDates(p, host);
         return;
       }
-      const counts = Derive.statusCounts;
+
+      const counts = {};
+      items.forEach(t => { const k = t.status || 'No status'; counts[k] = (counts[k] || 0) + 1; });
       const order = ['Completed', 'Work in progress', 'Final work', 'Installation', 'Material to order', 'Work to start', 'Vendor confirmation', 'Factory', 'No status'];
       const chips = order.filter(s => counts[s]).map(s =>
         `<button class="chip" data-status="${esc(s)}"><span class="pill ${statusClass(s === 'No status' ? null : s)}" style="padding:0;background:none"></span>${esc(s)} <span class="chip__n">${counts[s]}</span></button>`).join('');
-      $('#page-schedule').innerHTML = `
-        <div class="phead"><div><p class="eyebrow">Work schedule</p><h1>Schedule of works</h1>
-          <p class="phead__sub">${D.schedule.length} tasks across ${D.areas.length} areas (I–XI) · data as of ${shortDate(D.meta.reportDate)}</p></div></div>
-        <div class="chipbar"><button class="chip is-active" data-status="">All <span class="chip__n">${D.schedule.length}</span></button>${chips}</div>
-        <div id="scheduleAreas"></div>`;
-      $('.chipbar', $('#page-schedule')).addEventListener('click', e => {
+
+      host.innerHTML = this.timeline(p, items) + `
+        <div class="chipbar"><button class="chip is-active" data-status="">All <span class="chip__n">${items.length}</span></button>${chips}</div>
+        <div id="schedAreas"></div>`;
+
+      $('.chipbar', host).addEventListener('click', e => {
         const c = e.target.closest('.chip'); if (!c) return;
-        $$('#page-schedule .chip').forEach(x => x.classList.toggle('is-active', x === c));
+        $$('.chipbar .chip', host).forEach(x => x.classList.toggle('is-active', x === c));
         this.filter = c.dataset.status || null;
-        this.renderAreas();
+        this.renderAreas(p, host);
       });
-      $('#page-schedule').addEventListener('click', e => {
+      host.addEventListener('click', e => {
         const h = e.target.closest('.area__head'); if (h) h.parentElement.classList.toggle('is-open');
       });
-      this.renderAreas();
+
+      this.bindDates(p, host);
+      this.renderAreas(p, host);
     },
-    renderAreas() {
-      const wrap = $('#scheduleAreas');
-      wrap.innerHTML = Derive.areaProgress.map(a => {
-        let tasks = D.schedule.filter(t => t.area === a.code);
+
+    bindDates(p, host) {
+      const b = $('#schedDates', host);
+      if (b) b.addEventListener('click', () => this.editDates(p, host));
+    },
+
+    editDates(p, host) {
+      const meta = App.Store.schedMeta(p.id);
+      const F = (id, label, val, hint) =>
+        `<label class="field"><span>${label}</span><input id="${id}" type="date" value="${esc(val || '')}">
+         ${hint ? `<em class="faint" style="font-size:11.5px;font-style:normal">${hint}</em>` : ''}</label>`;
+      App.modal({
+        title: 'Schedule dates',
+        body: `<div class="formgrid">
+          ${F('sdStart', 'Project start', meta.start || p.start)}
+          ${F('sdPlanned', 'Planned completion', meta.planned || p.due)}
+          ${F('sdRevised', 'Revised completion', meta.revised, 'Leave empty while the project is on plan. Setting a later date marks it delayed.')}
+        </div>`,
+        footer: `<button class="btn btn--ghost" data-close>Cancel</button><button class="btn btn--accent" id="sdSave"><i class="fa-solid fa-check"></i> Save</button>`
+      });
+      $('#sdSave').addEventListener('click', () => {
+        App.Store.setSchedMeta(p.id, {
+          start: $('#sdStart').value || '',
+          planned: $('#sdPlanned').value || '',
+          revised: $('#sdRevised').value || ''
+        });
+        App.closeModal();
+        App.toast('Schedule updated', p.name, 'good');
+        this.render(p, host);
+      });
+    },
+
+    renderAreas(p, host) {
+      const wrap = $('#schedAreas', host); if (!wrap) return;
+      const items = this.items(p);
+      wrap.innerHTML = this.areasFor(items).map(a => {
+        let tasks = items.filter(t => t.area === a.code);
         if (this.filter) tasks = tasks.filter(t => (t.status || 'No status') === this.filter);
         if (!tasks.length) return '';
         return `<div class="area is-open">
           <div class="area__head">
-            <span class="area__code">${a.code}</span>
+            <span class="area__code">${esc(a.code)}</span>
             <span class="area__name">${esc(a.name || '')}</span>
             <span class="area__mini">${this._mini(a.pct)}</span>
             <span class="area__count">${a.done}/${a.total}</span>
@@ -246,11 +383,13 @@
           </div>
           <div class="area__body">${tasks.map(t => this._task(t)).join('')}</div>
         </div>`;
-      }).join('') || `<div class="card"><div class="dt__empty">No tasks match this status.</div></div>`;
+      }).join('') || `<div class="card"><div class="dt__empty">No work items match this status.</div></div>`;
     },
+
     _mini(pct) {
       return `<div class="settle" style="--pct:${pct}"><div class="settle__track" style="height:6px"><span class="settle__fill"></span></div></div>`;
     },
+
     _task(t) {
       const cls = statusClass(t.status);
       const ico = cls === 'completed' ? 'done' : (cls === 'progress' || cls === 'installation' || cls === 'final') ? 'wip' : 'pend';
@@ -263,13 +402,16 @@
             ${t.status ? `<span class="pill ${cls}">${esc(t.status)}</span>` : '<span class="pill none">No status</span>'}
             ${t.nature ? `<span class="tag">${esc(t.nature)}</span>` : ''}
             ${t.vendor ? `<span class="faint" style="font-size:11px"><i class="fa-solid fa-user"></i> ${esc(t.vendor)}</span>` : ''}
+            ${t.end ? `<span class="faint" style="font-size:11px"><i class="fa-regular fa-calendar"></i> ${shortDate(t.end)}</span>` : ''}
           </div>
         </div>
       </div>`;
-    },
-    refresh() { }
+    }
   };
-  App.register('schedule', schedule);
+
+  /* Exposed for the Projects module. Not registered as a route — that is
+     the whole point of the move. */
+  App.ProjectSchedule = projectSchedule;
 
   /* ── BUDGET ───────────────────────────────────────────── */
   const budget = {

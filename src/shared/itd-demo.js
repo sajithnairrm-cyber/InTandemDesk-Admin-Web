@@ -271,7 +271,55 @@
       activity[p.id].sort(function (a, b) { return b.at.localeCompare(a.at); });
     });
 
-    return { DATA: DATA, projects: projects, tasks: tasks, payments: payments, activity: activity, staff: staff };
+    /* ── Per-project schedules ──────────────────────────────────
+       Each project owns its work items outright. Nothing is shared,
+       so one project can never display another's schedule. */
+    var schedules = {};
+    schedules['demo-ayyappa'] = schedule;                      // the workbook engagement
+
+    schedules['demo-nilayam'] = works.slice(0, 22).map(function (w, i) {
+      var a = areas[i % 6];
+      var st = i < 6 ? 'Completed' : pick(statuses);
+      var sd = between(60, 240);
+      return { sino: i + 1, area: a.code, areaName: a.name, description: w, nature: pick(natures),
+               vendor: vendors[(i + 3) % vendors.length].vendor, archStatus: pick(['Approved', 'Pending']),
+               clientStatus: pick(['Approved', 'Awaiting']), start: day(sd), end: day(sd + between(6, 40)),
+               status: st, statusRaw: st };
+    });
+
+    schedules['demo-aroma'] = works.slice(0, 14).map(function (w, i) {
+      var a = areas[i % 4];
+      return { sino: i + 1, area: a.code, areaName: a.name, description: w, nature: pick(natures),
+               vendor: vendors[(i + 7) % vendors.length].vendor, archStatus: 'Approved', clientStatus: 'Approved',
+               start: day(-170 + i * 8), end: day(-160 + i * 8), status: 'Completed', statusRaw: 'Completed' };
+    });
+
+    /* ── Milestones — the standard construction sequence ────────── */
+    var msNames = ['Foundation', 'Structure', 'Masonry', 'Plumbing', 'Electrical', 'Interior', 'Finishing', 'Handover'];
+    var milestones = {};
+    projects.forEach(function (p) {
+      var doneTo = p.id === 'demo-aroma' ? 8 : (p.id === 'demo-ayyappa' ? 5 : 2);
+      milestones[p.id] = msNames.map(function (n, i) {
+        var planned = day(between(10, 230));
+        return {
+          id: 'ms-' + p.id + '-' + i, name: n, planned: planned,
+          actual: i < doneTo ? planned : '',
+          status: i < doneTo ? 'Completed' : (i === doneTo ? 'In progress' : pick(['Pending', 'Pending', 'Delayed'])),
+          engineer: pick(p.staff), notes: i < doneTo ? 'Signed off on site.' : '', attachments: []
+        };
+      });
+    });
+
+    /* Ayyappa carries a revised date, so the delay indicator has
+       something real to show. */
+    var schedmeta = {
+      'demo-ayyappa': { start: day(0), planned: day(240), revised: day(268) },
+      'demo-nilayam': { start: day(60), planned: day(420), revised: '' },
+      'demo-aroma':   { start: day(-180), planned: day(-30), revised: '' }
+    };
+
+    return { DATA: DATA, projects: projects, tasks: tasks, payments: payments, activity: activity,
+             staff: staff, schedules: schedules, milestones: milestones, schedmeta: schedmeta };
   }
 
   /* ── Public API ─────────────────────────────────────────── */
@@ -284,12 +332,16 @@
       write('itd.tasks', d.tasks);
       write('itd.payments', d.payments);
       write('itd.activity', d.activity);
+      write('itd.schedules', d.schedules);
+      write('itd.milestones', d.milestones);
+      write('itd.schedmeta', d.schedmeta);
       write(KEY, true);
       location.reload();
     },
 
     clear: function () {
-      ['itd.projects', 'itd.tasks', 'itd.payments', 'itd.activity', KEY]
+      ['itd.projects', 'itd.tasks', 'itd.payments', 'itd.activity',
+       'itd.schedules', 'itd.milestones', 'itd.schedmeta', KEY]
         .forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
       location.reload();
     }

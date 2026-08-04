@@ -220,7 +220,6 @@
   const NAV = [
     ['dashboard', 'fa-gauge-high', 'Office overview'],
     ['projects', 'fa-diagram-project', 'All projects'],
-    ['schedule', 'fa-list-check', 'Schedule of works'],
     ['budget', 'fa-sack-dollar', 'Project budget'],
     ['payments', 'fa-file-invoice-dollar', 'Client payments'],
     ['vendors', 'fa-building', 'Vendor accounts'],

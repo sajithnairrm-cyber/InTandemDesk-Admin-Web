@@ -215,7 +215,34 @@ window.App = (function () {
     updateTask(pid, tid, patch) { const a = this.tasks(pid); const i = a.findIndex(t => t.id === tid); if (i >= 0) { a[i] = { ...a[i], ...patch }; this.setTasks(pid, a); } },
     payments(pid) { const a = store.get('payments', []); return pid ? a.filter(p => p.projectId === pid) : a; },
     addPayment(p) { const a = store.get('payments', []); a.push(p); store.set('payments', a); logActivity(p.projectId, 'Payment recorded — ₹' + inr.format(p.amount)); notifyPush({ type: 'payment', icon: 'fa-indian-rupee-sign', title: 'Payment recorded', body: (p.invoiceNo ? p.invoiceNo + ' · ' : '') + '₹' + inr.format(p.amount), route: '#/payments' }); },
-    activity(pid) { return store.get('activity', {})[pid] || []; }
+    activity(pid) { return store.get('activity', {})[pid] || []; },
+
+    /* ── Per-project schedule ──────────────────────────────────────
+       Keyed by project id, so one project's schedule can never appear
+       in another. Unlimited projects; adding one costs a key, not a
+       schema change.
+
+         itd.schedules   { [projectId]: [ workItem, … ] }
+         itd.milestones  { [projectId]: [ milestone, … ] }
+         itd.schedmeta   { [projectId]: { start, planned, revised } }
+
+       workItem  sino · area · areaName · description · nature · vendor
+                 archStatus · clientStatus · start · end · status
+       milestone id · name · planned · actual · status · engineer
+                 notes · attachments[]                                */
+    schedule(pid) { return store.get('schedules', {})[pid] || []; },
+    setSchedule(pid, arr) { const all = store.get('schedules', {}); all[pid] = arr; store.set('schedules', all); },
+
+    milestones(pid) { return store.get('milestones', {})[pid] || []; },
+    setMilestones(pid, arr) { const all = store.get('milestones', {}); all[pid] = arr; store.set('milestones', all); },
+
+    schedMeta(pid) { return store.get('schedmeta', {})[pid] || {}; },
+    setSchedMeta(pid, patch) {
+      const all = store.get('schedmeta', {});
+      all[pid] = Object.assign({}, all[pid], patch);
+      store.set('schedmeta', all);
+      logActivity(pid, 'Schedule dates updated');
+    }
   };
 
   /* No seed data. A first run starts with an empty Projects tab and the
@@ -263,7 +290,9 @@ window.App = (function () {
   /* ── Module registry + router ─────────────────────────── */
   const modules = {};
   const mounted = new Set();
-  const ROUTES = ['dashboard', 'projects', 'schedule', 'budget', 'payments', 'vendors', 'ledger', 'staff', 'reports', 'news', 'settings'];
+  /* 'schedule' is deliberately absent — a schedule belongs to a project,
+     not to the application, and lives at #/projects/<id>?tab=schedule. */
+  const ROUTES = ['dashboard', 'projects', 'budget', 'payments', 'vendors', 'ledger', 'staff', 'reports', 'news', 'settings'];
   function register(route, mod) { modules[route] = mod; }
 
   function parts() {
@@ -356,7 +385,13 @@ window.App = (function () {
     Store.payments().forEach(p => searchIndex.push({ group: 'Payments', icon: 'fa-indian-rupee-sign', label: (p.invoiceNo || 'Invoice') + ' · ₹' + inr.format(p.amount), sub: p.client || 'payment', route: '#/payments' }));
     Derive.vendorsRich.forEach(v => searchIndex.push({ group: 'Vendors', icon: 'fa-building', label: v.account, sub: v.vendor || 'vendor', route: '#/vendors/' + v.sino }));
     D.budget.forEach(b => searchIndex.push({ group: 'Budget', icon: 'fa-list-check', label: b.description, sub: b.nature || 'budget line', route: '#/budget' }));
-    D.schedule.forEach(t => searchIndex.push({ group: 'Schedule', icon: 'fa-diagram-project', label: t.description, sub: (t.areaName || 'task'), route: '#/schedule' }));
+    /* Work items resolve to the schedule tab of the project that owns
+       them, so search never lands on a page that no longer exists. */
+    Store.projects().forEach(p => Store.schedule(p.id).forEach(t => searchIndex.push({
+      group: 'Schedule', icon: 'fa-list-check', label: t.description,
+      sub: (t.areaName || 'work item') + ' · ' + p.name,
+      route: '#/projects/' + p.id + '?tab=schedule'
+    })));
     D.ledger.forEach(t => searchIndex.push({ group: 'Ledger', icon: 'fa-receipt', label: (t.towards || t.vendor || 'payment'), sub: shortDate(t.date), route: '#/ledger' }));
   }
   function initSearch() {

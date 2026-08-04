@@ -153,7 +153,9 @@
 
     /* ---------- DETAIL ---------- */
     detail(p) {
-      const tabs = ['Overview', 'Timeline', 'Tasks', 'Milestones', 'Payments', 'Documents', 'Reports', 'Staff', 'Activity'];
+      /* Schedule sits second: after you know what the project is, the next
+         question is always whether it is on time. */
+      const tabs = ['Overview', 'Schedule', 'Tasks', 'Milestones', 'Payments', 'Documents', 'Reports', 'Team', 'Activity'];
       const active = (App.query().tab || 'overview').toLowerCase();
       $('#page-projects').innerHTML = `
         <a class="btn btn--ghost btn--sm" href="#/projects" style="margin-bottom:1rem"><i class="fa-solid fa-arrow-left"></i> All projects</a>
@@ -181,11 +183,18 @@
     tab(p, name) {
       const body = $('#pTabBody'); if (!body) return;
       const fns = {
-        overview: () => this.tabOverview(p), timeline: () => this.tabTimeline(p), tasks: () => this.tabTasks(p),
+        overview: () => this.tabOverview(p),
+        /* Schedule paints itself into the host element, because it owns
+           its own chips, filters and modal — so it returns nothing here. */
+        schedule: () => '',
+        timeline: () => this.tabTimeline(p), tasks: () => this.tabTasks(p),
         milestones: () => this.tabMilestones(p), payments: () => payments.projectPanel(p), documents: () => this.tabDocuments(p),
-        reports: () => this.tabReports(p), staff: () => this.tabStaff(p), activity: () => this.tabActivity(p)
+        reports: () => this.tabReports(p), team: () => this.tabStaff(p), staff: () => this.tabStaff(p),
+        activity: () => this.tabActivity(p)
       };
       body.innerHTML = (fns[name] || fns.overview)();
+      if (name === 'schedule' && App.ProjectSchedule) App.ProjectSchedule.render(p, body);
+      if (name === 'milestones') this.bindMilestones(p);
       if (name === 'tasks') this.bindKanban(p);
       if (name === 'overview' && p.live) this.overviewChart();
       if (name === 'payments') payments.bindProjectPanel(p);
@@ -202,7 +211,7 @@
         </div>
         <div class="grid g-4 mb">
           <a class="kpi" href="#/budget" style="cursor:pointer"><div class="kpi__label">Budget lines</div><div class="kpi__value">${D.budget.length}</div><div class="kpi__foot">Open budget →</div></a>
-          <a class="kpi" href="#/schedule" style="cursor:pointer"><div class="kpi__label">Schedule tasks</div><div class="kpi__value">${D.schedule.length}</div><div class="kpi__foot">Open schedule →</div></a>
+          <a class="kpi" href="#/projects/${p.id}?tab=schedule" style="cursor:pointer"><div class="kpi__label">Schedule tasks</div><div class="kpi__value">${D.schedule.length}</div><div class="kpi__foot">Open schedule →</div></a>
           <a class="kpi" href="#/vendors" style="cursor:pointer"><div class="kpi__label">Vendor accounts</div><div class="kpi__value">${D.vendors.length}</div><div class="kpi__foot">Open vendors →</div></a>
           <a class="kpi" href="#/ledger" style="cursor:pointer"><div class="kpi__label">Transactions</div><div class="kpi__value">${D.ledger.length}</div><div class="kpi__foot">Open ledger →</div></a>
         </div>
@@ -337,20 +346,143 @@
           <div class="tl__body"><div class="tl__t">${esc(e.t)}</div><div class="tl__s">${esc(e.s)}</div></div>
           <span class="tl__date">${e.at ? shortDate(e.at) : '—'}</span></li>`).join('')}</ol></div></div>`;
     },
-    tabMilestones(p) {
-      // milestones derived from completed columns / high-priority tasks
-      const tasks = Store.tasks(p.id);
-      const done = tasks.filter(t => t.status === 'Completed').length;
-      const ms = [
-        { t: 'Project initiated', done: !!p.start },
-        { t: 'First task created', done: tasks.length > 0 },
-        { t: '50% tasks complete', done: tasks.length > 0 && done / tasks.length >= .5 },
-        { t: 'First payment recorded', done: Store.payments(p.id).length > 0 },
-        { t: 'Project completed', done: p.status === 'Completed' }
-      ];
-      return `<div class="card"><div class="card__head"><div><h2>Milestones</h2><p class="sub">${ms.filter(m => m.done).length} of ${ms.length} reached</p></div></div>
-        <div class="card__body">${ms.map(m => `<div class="task"><i class="fa-solid ${m.done ? 'fa-circle-check task__ico done' : 'fa-circle task__ico pend'}"></i><div class="task__body"><div class="task__desc">${esc(m.t)}</div></div></div>`).join('')}</div></div>`;
+    /* ── MILESTONES ─────────────────────────────────────────────────
+       Real records per project, not derived flags. Stored under
+       itd.milestones keyed by project id, so milestones never leak
+       between projects.
+
+         id · name · planned · actual · status · engineer · notes · attachments[]
+
+       The default set is the standard construction sequence; a project
+       with none offers to seed it rather than showing a dead end. */
+    MS_STATUS: ['Pending', 'In progress', 'Completed', 'Delayed'],
+    MS_DEFAULT: ['Foundation', 'Structure', 'Masonry', 'Plumbing', 'Electrical', 'Interior', 'Finishing', 'Handover'],
+
+    msPill(m) {
+      const map = { 'Completed': 'completed', 'In progress': 'progress', 'Delayed': 'due', 'Pending': 'none' };
+      return `<span class="pill ${map[m.status] || 'none'}">${esc(m.status || 'Pending')}</span>`;
     },
+
+    tabMilestones(p) {
+      const ms = Store.milestones(p.id);
+      const done = ms.filter(m => m.status === 'Completed').length;
+
+      if (!ms.length) {
+        return `<div class="card">
+          <div class="card__head"><div><h2>Milestones</h2><p class="sub">Key stages for this project</p></div></div>
+          <div class="card__body">
+            ${App.empty('No milestones set for this project.', {
+              bare: true, icon: 'fa-flag-checkered',
+              hint: 'Track the stages that matter — foundation through handover — each with a planned date, an owner and a status.',
+              action: `<button class="btn btn--accent btn--sm" id="msSeed"><i class="fa-solid fa-wand-magic-sparkles"></i> Add standard stages</button>
+                       <button class="btn btn--ghost btn--sm" id="msAdd" style="margin-left:.5rem"><i class="fa-solid fa-plus"></i> Add one</button>`
+            })}
+          </div></div>`;
+      }
+
+      const todayIso = new Date().toISOString().slice(0, 10);
+      return `<div class="card">
+        <div class="card__head">
+          <div><h2>Milestones</h2><p class="sub">${done} of ${ms.length} reached</p></div>
+          <button class="btn btn--ghost btn--sm" id="msAdd"><i class="fa-solid fa-plus"></i> Add milestone</button>
+        </div>
+        <div class="card__body">
+          <div style="margin-bottom:1rem">${settleBar(done, ms.length, { legend: false })}</div>
+          <div class="tablewrap" style="box-shadow:none;border:0"><table class="dt" style="min-width:0">
+            <thead><tr><th>Milestone</th><th>Planned</th><th>Actual</th><th>Status</th><th class="hide-sm">Engineer</th><th></th></tr></thead>
+            <tbody>${ms.map(m => {
+              const late = m.status !== 'Completed' && m.planned && m.planned < todayIso;
+              return `<tr>
+                <td class="strong">${esc(m.name)}${m.notes ? `<div class="faint" style="font-size:11px">${esc(m.notes)}</div>` : ''}</td>
+                <td class="num">${m.planned ? shortDate(m.planned) : '—'}${late ? ' <i class="fa-solid fa-triangle-exclamation" style="color:var(--warn);font-size:10px" title="Past the planned date"></i>' : ''}</td>
+                <td class="num">${m.actual ? shortDate(m.actual) : '<span class="faint">—</span>'}</td>
+                <td>${this.msPill(m)}</td>
+                <td class="hide-sm">${esc((App.staffById(m.engineer) || {}).name || '—')}</td>
+                <td><button class="btn btn--ghost btn--sm msEdit" data-id="${esc(m.id)}" title="Edit"><i class="fa-solid fa-pen"></i></button></td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table></div>
+        </div></div>`;
+    },
+
+    bindMilestones(p) {
+      const seed = $('#msSeed');
+      if (seed) seed.addEventListener('click', () => {
+        const today = new Date();
+        Store.setMilestones(p.id, this.MS_DEFAULT.map((n, i) => {
+          const d = new Date(today); d.setDate(d.getDate() + (i + 1) * 30);
+          return { id: genId('ms'), name: n, planned: d.toISOString().slice(0, 10),
+                   actual: '', status: 'Pending', engineer: '', notes: '', attachments: [] };
+        }));
+        App.toast('Milestones added', this.MS_DEFAULT.length + ' standard stages', 'good');
+        this.tab(p, 'milestones');
+      });
+
+      const add = $('#msAdd');
+      if (add) add.addEventListener('click', () => this.msForm(p, null));
+
+      $$('#pTabBody .msEdit').forEach(b => b.addEventListener('click', () =>
+        this.msForm(p, Store.milestones(p.id).find(m => m.id === b.dataset.id) || null)));
+    },
+
+    msForm(p, m) {
+      const editing = !!m;
+      const rec = m || {};
+      const staffOpts = [{ v: '', l: 'Unassigned' }].concat((App.STAFF || []).map(s => ({ v: s.id, l: s.name })));
+      App.modal({
+        title: editing ? 'Edit milestone' : 'Add milestone',
+        body: `<div class="formgrid">
+          <label class="field"><span>Milestone name *</span><input id="msName" value="${esc(rec.name || '')}" placeholder="e.g. Structure"><em class="field__err" id="msNameErr"></em></label>
+          <div class="formrow">
+            <label class="field"><span>Planned date</span><input id="msPlanned" type="date" value="${esc(rec.planned || '')}"></label>
+            <label class="field"><span>Actual completion</span><input id="msActual" type="date" value="${esc(rec.actual || '')}"></label>
+          </div>
+          <div class="formrow">
+            <label class="field"><span>Status</span><select id="msStatus">${this.MS_STATUS.map(x => `<option ${((rec.status || 'Pending') === x) ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
+            <label class="field"><span>Assigned engineer</span><select id="msEng">${staffOpts.map(o => `<option value="${esc(o.v)}" ${rec.engineer === o.v ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select></label>
+          </div>
+          <label class="field"><span>Notes</span><textarea id="msNotes" rows="3" placeholder="Site observations, sign-off reference…">${esc(rec.notes || '')}</textarea></label>
+          <p class="muted" style="font-size:12px;margin:.2rem 0 0">Attachments arrive with file storage — the field is reserved on the record so nothing has to be migrated later.</p>
+        </div>`,
+        footer: `${editing ? '<button class="btn btn--ghost" id="msDel" style="color:var(--warn);margin-right:auto"><i class="fa-solid fa-trash"></i> Delete</button>' : ''}
+                 <button class="btn btn--ghost" data-close>Cancel</button>
+                 <button class="btn btn--accent" id="msSave"><i class="fa-solid fa-check"></i> Save</button>`
+      });
+
+      $('#msSave').addEventListener('click', () => {
+        const name = $('#msName').value.trim();
+        if (!setErr('msName', name ? '' : 'Milestone name is required')) return;
+        const data = {
+          name, planned: $('#msPlanned').value, actual: $('#msActual').value,
+          status: $('#msStatus').value, engineer: $('#msEng').value,
+          notes: $('#msNotes').value.trim(), attachments: rec.attachments || []
+        };
+        /* Recording an actual date without moving the status is the most
+           common slip, so complete it for them. */
+        if (data.actual && data.status !== 'Completed') data.status = 'Completed';
+
+        const all = Store.milestones(p.id);
+        if (editing) {
+          const i = all.findIndex(x => x.id === rec.id);
+          if (i >= 0) all[i] = Object.assign({}, all[i], data);
+        } else {
+          all.push(Object.assign({ id: genId('ms') }, data));
+        }
+        Store.setMilestones(p.id, all);
+        App.closeModal();
+        App.toast(editing ? 'Milestone updated' : 'Milestone added', name, 'good');
+        this.tab(p, 'milestones');
+      });
+
+      const del = $('#msDel');
+      if (del) del.addEventListener('click', () => {
+        Store.setMilestones(p.id, Store.milestones(p.id).filter(x => x.id !== rec.id));
+        App.closeModal();
+        App.toast('Milestone removed', rec.name || '', 'warn');
+        this.tab(p, 'milestones');
+      });
+    },
+
     tabDocuments(p) {
       return this.empty('fa-folder-open', 'No documents yet', 'Attachment storage needs a file backend — this app keeps data in the browser only. Drawings, invoices and photos would list here once connected.');
     },
