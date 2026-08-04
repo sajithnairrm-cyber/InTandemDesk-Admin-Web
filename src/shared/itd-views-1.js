@@ -296,18 +296,32 @@
       </div>`;
     },
 
-    /** Render into the project workspace tab. */
+    /** Render into the project workspace tab.
+
+        The host is re-resolved every time. Handlers created when the tab
+        opened close over the element that existed then, and anything that
+        re-renders the workspace in between — a route change, an edit
+        elsewhere — replaces it. Painting into that detached node succeeds
+        silently and shows the user nothing, which is the worst kind of
+        failure: the data saved, the screen disagreed. */
     render(p, host) {
+      if (!host || !host.isConnected) host = document.getElementById('pTabBody') || host;
+      if (!host) return;
       this.pid = p.id;
       this.filter = null;
-      const items = this.items(p);
+      /* Materialise on first open: the workbook project reads through to
+         window.DATA until then, and rows need stable ids to be editable.
+         Idempotent — a second open writes nothing. */
+      const items = this.ensureOwn(p);
 
       if (!items.length) {
         host.innerHTML = this.timeline(p, items) + App.empty('No work schedule for this project.', {
           icon: 'fa-list-check',
-          hint: 'Work items, areas and their status appear here once this project has a schedule.'
+          hint: 'Break the project into work items — area by area — each with a vendor, dates and a status.',
+          action: '<button class="btn btn--accent btn--sm" id="wiAdd"><i class="fa-solid fa-plus"></i> Add work item</button>'
         });
         this.bindDates(p, host);
+        this.bindItems(p, host);
         return;
       }
 
@@ -318,7 +332,12 @@
         `<button class="chip" data-status="${esc(s)}"><span class="pill ${statusClass(s === 'No status' ? null : s)}" style="padding:0;background:none"></span>${esc(s)} <span class="chip__n">${counts[s]}</span></button>`).join('');
 
       host.innerHTML = this.timeline(p, items) + `
-        <div class="chipbar"><button class="chip is-active" data-status="">All <span class="chip__n">${items.length}</span></button>${chips}</div>
+        <div class="fbbar">
+          <div class="chipbar fbbar__grow" style="margin:0"><button class="chip is-active" data-status="">All <span class="chip__n">${items.length}</span></button>${chips}</div>
+          <div class="fbbar__end">
+            <button class="btn btn--accent btn--sm" id="wiAdd"><i class="fa-solid fa-plus"></i> Add work item</button>
+          </div>
+        </div>
         <div id="schedAreas"></div>`;
 
       $('.chipbar', host).addEventListener('click', e => {
@@ -332,7 +351,24 @@
       });
 
       this.bindDates(p, host);
+      this.bindItems(p, host);
       this.renderAreas(p, host);
+    },
+
+    /* Add button, plus click-to-edit on any work item. Delegated from the
+       host so it survives renderAreas() repainting the list. */
+    bindItems(p, host) {
+      const add = $('#wiAdd', host);
+      if (add) add.addEventListener('click', () => this.itemForm(p, null, host));
+
+      if (host.dataset.wiBound) return;      // one delegated listener, not one per repaint
+      host.dataset.wiBound = '1';
+      host.addEventListener('click', (e) => {
+        const row = e.target.closest('.task[data-wi]');
+        if (!row) return;
+        const item = this.ensureOwn(p).find(x => x.id === row.dataset.wi);
+        if (item) this.itemForm(p, item, host);
+      });
     },
 
     bindDates(p, host) {
@@ -368,7 +404,7 @@
 
     renderAreas(p, host) {
       const wrap = $('#schedAreas', host); if (!wrap) return;
-      const items = this.items(p);
+      const items = this.ensureOwn(p);
       wrap.innerHTML = this.areasFor(items).map(a => {
         let tasks = items.filter(t => t.area === a.code);
         if (this.filter) tasks = tasks.filter(t => (t.status || 'No status') === this.filter);
@@ -386,6 +422,156 @@
       }).join('') || `<div class="card"><div class="dt__empty">No work items match this status.</div></div>`;
     },
 
+    /* ── Work-item management ───────────────────────────────────────
+       Adding, editing and removing schedule items for THIS project. */
+    WI_STATUS: ['Work to start', 'Material to order', 'Vendor confirmation', 'Factory',
+                'Work in progress', 'Installation', 'Final work', 'Completed'],
+    WI_NATURE: ['Supply & Install', 'Supply only', 'Labour only', 'Turnkey'],
+    WI_APPROVAL: ['Pending', 'Issued', 'Approved', 'Awaiting', 'Reviewed'],
+
+    /** Stable id for edit/delete. Older imported rows have none. */
+    _wid() { return 'wi' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); },
+
+    /* The workbook project reads through to window.DATA until it is
+       edited. Materialise that into per-project storage on the first
+       write, or adding one item would silently replace the imported set. */
+    ensureOwn(p) {
+      let own = App.Store.schedule(p.id);
+      if (!own.length) {
+        const seed = this.items(p);
+        own = seed.map(x => Object.assign({}, x, { id: x.id || this._wid() }));
+        if (own.length) App.Store.setSchedule(p.id, own);
+      }
+      let dirty = false;
+      own.forEach(x => { if (!x.id) { x.id = this._wid(); dirty = true; } });
+      if (dirty) App.Store.setSchedule(p.id, own);
+      return own;
+    },
+
+    /** Areas already used by this project, plus any from the workbook. */
+    areaOptions(p) {
+      const seen = new Map();
+      (D.areas || []).forEach(a => seen.set(a.code, a.name));
+      this.items(p).forEach(t => { if (t.area && !seen.has(t.area)) seen.set(t.area, t.areaName || ''); });
+      return [...seen.entries()].map(([code, name]) => ({ code, name }));
+    },
+
+    /** Next free roman numeral, so a new area gets a sensible code. */
+    nextAreaCode(p) {
+      const R = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII','XIII','XIV','XV',
+                 'XVI','XVII','XVIII','XIX','XX'];
+      const used = new Set(this.areaOptions(p).map(a => a.code));
+      return R.find(c => !used.has(c)) || ('A' + (used.size + 1));
+    },
+
+    itemForm(p, item, host) {
+      const editing = !!item;
+      const rec = item || {};
+      const areas = this.areaOptions(p);
+      const err = (id, m) => {
+        const e = $('#' + id + 'Err'); if (e) e.textContent = m || '';
+        const f = $('#' + id); if (f) f.classList.toggle('is-invalid', !!m);
+        return !m;
+      };
+
+      App.modal({
+        title: editing ? 'Edit work item' : 'Add work item',
+        body: `<div class="formgrid">
+          <label class="field"><span>Work description *</span>
+            <input id="wiDesc" value="${esc(rec.description || '')}" placeholder="e.g. Internal plastering">
+            <em class="field__err" id="wiDescErr"></em></label>
+
+          <div class="formrow">
+            <label class="field"><span>Area</span>
+              <select id="wiArea">
+                ${areas.map(a => `<option value="${esc(a.code)}" ${rec.area === a.code ? 'selected' : ''}>${esc(a.code)} — ${esc(a.name || 'Unnamed')}</option>`).join('')}
+                <option value="__new" ${!rec.area && !areas.length ? 'selected' : ''}>+ New area…</option>
+              </select></label>
+            <label class="field" id="wiNewAreaWrap" hidden><span>New area name</span>
+              <input id="wiNewArea" placeholder="e.g. Terrace & Utility"></label>
+            <label class="field"><span>Nature of work</span>
+              <select id="wiNature">${this.WI_NATURE.map(n => `<option ${rec.nature === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+          </div>
+
+          <label class="field"><span>Vendor / contractor</span>
+            <input id="wiVendor" value="${esc(rec.vendor || '')}" placeholder="Who is doing this work" list="wiVendorList">
+            <datalist id="wiVendorList">${(D.vendors || []).map(v => `<option value="${esc(v.vendor)}"></option>`).join('')}</datalist></label>
+
+          <div class="formrow">
+            <label class="field"><span>Planned start</span><input id="wiStart" type="date" value="${esc(rec.start || '')}"></label>
+            <label class="field"><span>Planned finish</span><input id="wiEnd" type="date" value="${esc(rec.end || '')}">
+              <em class="field__err" id="wiEndErr"></em></label>
+          </div>
+
+          <label class="field"><span>Status</span>
+            <select id="wiStatus">${this.WI_STATUS.map(s => `<option ${(rec.status || 'Work to start') === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
+
+          <div class="formrow">
+            <label class="field"><span>Architect approval</span>
+              <select id="wiArch">${['—'].concat(this.WI_APPROVAL).map(s => `<option ${(rec.archStatus || '—') === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
+            <label class="field"><span>Client approval</span>
+              <select id="wiClient">${['—'].concat(this.WI_APPROVAL).map(s => `<option ${(rec.clientStatus || '—') === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
+          </div>
+        </div>`,
+        footer: `${editing ? '<button class="btn btn--ghost" id="wiDel" style="color:var(--warn);margin-right:auto"><i class="fa-solid fa-trash"></i> Delete</button>' : ''}
+                 <button class="btn btn--ghost" data-close>Cancel</button>
+                 <button class="btn btn--accent" id="wiSave"><i class="fa-solid fa-check"></i> ${editing ? 'Save changes' : 'Add work item'}</button>`
+      });
+
+      /* Reveal the new-area field only when it is actually needed. */
+      const areaSel = $('#wiArea'), newWrap = $('#wiNewAreaWrap');
+      const syncArea = () => { newWrap.hidden = areaSel.value !== '__new'; };
+      areaSel.addEventListener('change', syncArea); syncArea();
+
+      $('#wiSave').addEventListener('click', () => {
+        const desc = $('#wiDesc').value.trim();
+        let ok = err('wiDesc', desc ? '' : 'Describe the work');
+        const start = $('#wiStart').value, end = $('#wiEnd').value;
+        if (start && end) ok = err('wiEnd', end >= start ? '' : 'Finish must be on or after start') && ok;
+        if (!ok) return;
+
+        let area = areaSel.value, areaName = '';
+        if (area === '__new') {
+          areaName = $('#wiNewArea').value.trim() || 'New area';
+          area = this.nextAreaCode(p);
+        } else {
+          areaName = (areas.find(a => a.code === area) || {}).name || '';
+        }
+
+        const status = $('#wiStatus').value;
+        const data = {
+          description: desc, area, areaName,
+          nature: $('#wiNature').value, vendor: $('#wiVendor').value.trim(),
+          start, end, status, statusRaw: status,
+          archStatus: $('#wiArch').value === '—' ? '' : $('#wiArch').value,
+          clientStatus: $('#wiClient').value === '—' ? '' : $('#wiClient').value
+        };
+
+        const all = this.ensureOwn(p);
+        if (editing) {
+          const i = all.findIndex(x => x.id === rec.id);
+          if (i >= 0) all[i] = Object.assign({}, all[i], data);
+        } else {
+          all.push(Object.assign({ id: this._wid(), sino: all.length + 1 }, data));
+        }
+        App.Store.setSchedule(p.id, all);
+        App.closeModal();
+        App.toast(editing ? 'Work item updated' : 'Work item added', desc, 'good');
+        if (App.buildSearchIndex) App.buildSearchIndex();
+        this.render(p, host);
+      });
+
+      const del = $('#wiDel');
+      if (del) del.addEventListener('click', () => {
+        const all = this.ensureOwn(p).filter(x => x.id !== rec.id);
+        App.Store.setSchedule(p.id, all);
+        App.closeModal();
+        App.toast('Work item removed', rec.description || '', 'warn');
+        if (App.buildSearchIndex) App.buildSearchIndex();
+        this.render(p, host);
+      });
+    },
+
     _mini(pct) {
       return `<div class="settle" style="--pct:${pct}"><div class="settle__track" style="height:6px"><span class="settle__fill"></span></div></div>`;
     },
@@ -394,7 +580,7 @@
       const cls = statusClass(t.status);
       const ico = cls === 'completed' ? 'done' : (cls === 'progress' || cls === 'installation' || cls === 'final') ? 'wip' : 'pend';
       const icon = cls === 'completed' ? 'fa-circle-check' : ico === 'wip' ? 'fa-circle-half-stroke' : 'fa-circle';
-      return `<div class="task">
+      return `<div class="task"${t.id ? ` data-wi="${esc(t.id)}" style="cursor:pointer" title="Edit this work item"` : ''}>
         <i class="fa-solid ${icon} task__ico ${ico}"></i>
         <div class="task__body">
           <div class="task__desc">${esc(t.description)}</div>
