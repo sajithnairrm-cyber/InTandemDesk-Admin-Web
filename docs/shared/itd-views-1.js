@@ -599,6 +599,241 @@
      the whole point of the move. */
   App.ProjectSchedule = projectSchedule;
 
+  /* ── PROJECT BUDGET ────────────────────────────────────────────────
+     Budget lines owned by a project, not by the application.
+
+     Same source order as the schedule: per-project storage first, with
+     the imported workbook as a read-through for the engagement it
+     belongs to, materialised on first edit so adding one line cannot
+     replace the imported set. */
+  const projectBudget = {
+    SECTIONS: ['MAIN', 'NATURAL STONE', 'JOINERY', 'SERVICES', 'FINISHES', 'EXTERNAL'],
+    NATURES: ['Supply & Install', 'Supply only', 'Labour only', 'Turnkey'],
+    TYPES: ['Civil', 'Interior', 'MEP', 'External'],
+    STATUS: ['Quote awaited', 'In progress', 'Finalised', 'Approved'],
+
+    _bid() { return 'bl' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); },
+
+    lines(p) {
+      const own = App.Store.budget(p.id);
+      if (own.length) return own;
+      const m = D.meta || {};
+      if (m.project && p.name === m.project) return D.budget;
+      return [];
+    },
+
+    ensureOwn(p) {
+      let own = App.Store.budget(p.id);
+      if (!own.length) {
+        own = this.lines(p).map(x => Object.assign({}, x, { id: x.id || this._bid() }));
+        if (own.length) App.Store.setBudget(p.id, own);
+      }
+      let dirty = false;
+      own.forEach(x => { if (!x.id) { x.id = this._bid(); dirty = true; } });
+      if (dirty) App.Store.setBudget(p.id, own);
+      return own;
+    },
+
+    totals(lines) {
+      const gst = lines.reduce((s, b) => s + (Number(b.quoteGst) || 0), 0);
+      const noGst = lines.reduce((s, b) => s + (Number(b.quoteNoGst) || 0), 0);
+      const released = lines.reduce((s, b) => s + (Number(b.released) || 0), 0);
+      return { gst, noGst, released, balance: gst - released, pct: App.pctOf(released, gst) };
+    },
+
+    render(p, host) {
+      if (!host || !host.isConnected) host = document.getElementById('pTabBody') || host;
+      if (!host) return;
+      const lines = this.ensureOwn(p);
+      const t = this.totals(lines);
+
+      /* Against the project's own approved budget, if one is set. */
+      const approved = Number(p.budget) || 0;
+      const over = approved && t.gst > approved;
+
+      const head = `
+        <div class="grid g-4 mb">
+          <div class="kpi"><div class="kpi__label">Quoted (incl. GST)</div><div class="kpi__value">${money(t.gst, true)}</div>
+            <div class="kpi__foot">${lines.length} line${lines.length === 1 ? '' : 's'}</div></div>
+          <div class="kpi"><div class="kpi__label">Released</div><div class="kpi__value" style="color:var(--settled)">${money(t.released, true)}</div>
+            <div class="kpi__foot">${t.pct}% of quoted</div></div>
+          <div class="kpi"><div class="kpi__label">Balance</div><div class="kpi__value" style="color:${t.balance > 0 ? 'var(--warn)' : 'var(--muted)'}">${money(t.balance, true)}</div>
+            <div class="kpi__foot">still to release</div></div>
+          <div class="kpi"><div class="kpi__label">Approved budget</div>
+            <div class="kpi__value">${approved ? money(approved, true) : '<span class="faint" style="font-family:var(--body);font-size:15px">Not set</span>'}</div>
+            <div class="kpi__foot">${approved ? (over ? `<span style="color:var(--warn)">Over by ${money(t.gst - approved, true)}</span>` : `${money(approved - t.gst, true)} headroom`) : 'set it in project settings'}</div></div>
+        </div>
+        ${approved ? `<div class="card mb"><div class="card__body">
+          <div class="pcard__progtop"><span>Quoted against approved budget</span><b${over ? ' style="color:var(--warn)"' : ''}>${App.pctOf(t.gst, approved)}%</b></div>
+          ${settleBar(Math.min(t.gst, approved), approved, { legend: false })}
+          ${over ? `<p class="muted" style="font-size:12.5px;margin:.7rem 0 0"><i class="fa-solid fa-triangle-exclamation" style="color:var(--warn)"></i> Quotations exceed the approved budget. Revise the budget on the project, or reduce scope.</p>` : ''}
+        </div></div>` : ''}`;
+
+      if (!lines.length) {
+        host.innerHTML = head + App.empty('No budget lines for this project.', {
+          icon: 'fa-sack-dollar',
+          hint: 'Add the quoted items — trade by trade — with amounts and what has been released against each.',
+          action: '<button class="btn btn--accent btn--sm" id="blAdd"><i class="fa-solid fa-plus"></i> Add budget line</button>'
+        });
+        this.bind(p, host);
+        return;
+      }
+
+      const bySection = {};
+      lines.forEach(b => { const k = b.section || 'OTHER'; (bySection[k] = bySection[k] || []).push(b); });
+
+      host.innerHTML = head + `
+        <div class="fbbar">
+          <div class="search__field fbbar__grow" style="max-width:280px"><i class="fa-solid fa-magnifying-glass"></i>
+            <input id="blQ" placeholder="Search description or vendor…"></div>
+          <div class="fbbar__end">
+            <button class="btn btn--accent btn--sm" id="blAdd"><i class="fa-solid fa-plus"></i> Add budget line</button>
+          </div>
+        </div>
+        <div id="blBody"></div>`;
+      this.bind(p, host);
+      this.renderLines(p, host);
+    },
+
+    renderLines(p, host) {
+      const wrap = $('#blBody', host); if (!wrap) return;
+      const q = (this._q || '').toLowerCase();
+      let lines = this.ensureOwn(p);
+      if (q) lines = lines.filter(b =>
+        (b.description || '').toLowerCase().includes(q) || (b.vendor || '').toLowerCase().includes(q));
+
+      if (!lines.length) { wrap.innerHTML = `<div class="card"><div class="dt__empty">No budget lines match.</div></div>`; return; }
+
+      const bySection = {};
+      lines.forEach(b => { const k = b.section || 'OTHER'; (bySection[k] = bySection[k] || []).push(b); });
+
+      wrap.innerHTML = Object.keys(bySection).map(sec => {
+        const items = bySection[sec];
+        const st = this.totals(items);
+        return `<div class="monthhead"><h3>${esc(sec)}</h3><span class="tot">${items.length} lines · <b>${money(st.gst)}</b></span></div>
+        <div class="tablewrap"><table class="dt">
+          <thead><tr><th>Description</th><th class="hide-sm">Vendor</th><th class="hide-sm">Nature</th><th class="num">Quote (GST)</th><th class="num">Released</th><th class="num">Balance</th><th>Status</th><th></th></tr></thead>
+          <tbody>${items.map(b => {
+            const bal = (Number(b.quoteGst) || 0) - (Number(b.released) || 0);
+            return `<tr>
+              <td class="strong">${esc(b.description || '—')}${b.comments ? `<div class="faint" style="font-size:11px">${esc(b.comments)}</div>` : ''}</td>
+              <td class="hide-sm">${esc(b.vendor || '—')}</td>
+              <td class="hide-sm"><span class="tag">${esc(b.nature || '—')}</span></td>
+              <td class="num">${money(b.quoteGst || 0)}</td>
+              <td class="num" style="color:var(--settled)">${money(b.released || 0)}</td>
+              <td class="num" style="color:${bal > 0 ? 'var(--warn)' : 'var(--muted)'}">${money(bal)}</td>
+              <td><span class="tag">${esc(b.status || '—')}</span></td>
+              <td><button class="btn btn--ghost btn--sm blEdit" data-id="${esc(b.id)}" title="Edit line"><i class="fa-solid fa-pen"></i></button></td>
+            </tr>`;
+          }).join('')}</tbody>
+          <tfoot><tr><td colspan="3">${items.length} lines</td><td class="num">${money(st.gst)}</td><td class="num">${money(st.released)}</td><td class="num">${money(st.balance)}</td><td colspan="2"></td></tr></tfoot>
+        </table></div>`;
+      }).join('');
+
+      $$('#blBody .blEdit', host).forEach(b => b.addEventListener('click', () =>
+        this.form(p, this.ensureOwn(p).find(x => x.id === b.dataset.id), host)));
+    },
+
+    bind(p, host) {
+      const add = $('#blAdd', host);
+      if (add) add.addEventListener('click', () => this.form(p, null, host));
+      const q = $('#blQ', host);
+      if (q) q.addEventListener('input', e => { this._q = e.target.value; this.renderLines(p, host); });
+    },
+
+    form(p, line, host) {
+      const ed = !!line, r = line || {};
+      const sel = (id, label, opts, val) =>
+        `<label class="field"><span>${label}</span><select id="${id}">${opts.map(o => `<option ${((val || opts[0]) === o) ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></label>`;
+      const err = (id, m) => {
+        const e = $('#' + id + 'Err'); if (e) e.textContent = m || '';
+        const f = $('#' + id); if (f) f.classList.toggle('is-invalid', !!m);
+        return !m;
+      };
+
+      App.modal({
+        title: ed ? 'Edit budget line' : 'Add budget line',
+        body: `<div class="formgrid">
+          <label class="field"><span>Description *</span>
+            <input id="blDesc" value="${esc(r.description || '')}" placeholder="e.g. Italian marble flooring">
+            <em class="field__err" id="blDescErr"></em></label>
+          <div class="formrow">
+            ${sel('blSection', 'Section', this.SECTIONS, r.section)}
+            ${sel('blType', 'Type', this.TYPES, r.type)}
+          </div>
+          <label class="field"><span>Vendor</span>
+            <input id="blVendor" value="${esc(r.vendor || '')}" list="blVendorList" placeholder="Who is quoting">
+            <datalist id="blVendorList">${(D.vendors || []).map(v => `<option value="${esc(v.vendor)}"></option>`).join('')}</datalist></label>
+          <div class="formrow">
+            ${sel('blNature', 'Nature of work', this.NATURES, r.nature)}
+            ${sel('blStatus', 'Status', this.STATUS, r.status)}
+          </div>
+          <div class="formrow">
+            <label class="field"><span>Quote excl. GST (₹)</span><input id="blNoGst" type="number" min="0" value="${r.quoteNoGst != null ? r.quoteNoGst : ''}" placeholder="0"></label>
+            <label class="field"><span>Quote incl. GST (₹) *</span><input id="blGst" type="number" min="0" value="${r.quoteGst != null ? r.quoteGst : ''}" placeholder="0">
+              <em class="field__err" id="blGstErr"></em></label>
+          </div>
+          <label class="field"><span>Released so far (₹)</span><input id="blRel" type="number" min="0" value="${r.released != null ? r.released : 0}" placeholder="0">
+            <em class="field__err" id="blRelErr"></em></label>
+          <label class="field"><span>Comments</span><input id="blComments" value="${esc(r.comments || '')}" placeholder="Revised quote received…"></label>
+        </div>`,
+        footer: `${ed ? '<button class="btn btn--ghost" id="blDel" style="color:var(--warn);margin-right:auto"><i class="fa-solid fa-trash"></i> Delete</button>' : ''}
+                 <button class="btn btn--ghost" data-close>Cancel</button>
+                 <button class="btn btn--accent" id="blSave"><i class="fa-solid fa-check"></i> ${ed ? 'Save changes' : 'Add line'}</button>`
+      });
+
+      /* Filling the pre-GST amount offers the inclusive figure, because
+         quotes arrive both ways and 18% is the common case. */
+      const noGst = $('#blNoGst'), gst = $('#blGst');
+      noGst.addEventListener('blur', () => {
+        const v = Number(noGst.value);
+        if (v > 0 && !Number(gst.value)) gst.value = Math.round(v * 1.18);
+      });
+
+      $('#blSave').addEventListener('click', () => {
+        const desc = $('#blDesc').value.trim();
+        let ok = err('blDesc', desc ? '' : 'Describe the budget line');
+        const g = Number(gst.value) || 0;
+        ok = err('blGst', g > 0 ? '' : 'Enter the quoted amount') && ok;
+        const rel = Number($('#blRel').value) || 0;
+        ok = err('blRel', rel <= g ? '' : 'Released cannot exceed the quote') && ok;
+        if (!ok) return;
+
+        const data = {
+          description: desc, section: $('#blSection').value, type: $('#blType').value,
+          vendor: $('#blVendor').value.trim(), nature: $('#blNature').value, status: $('#blStatus').value,
+          quoteNoGst: Number(noGst.value) || 0, quoteGst: g, released: rel, balance: g - rel,
+          comments: $('#blComments').value.trim()
+        };
+
+        const all = this.ensureOwn(p);
+        if (ed) {
+          const i = all.findIndex(x => x.id === r.id);
+          if (i >= 0) all[i] = Object.assign({}, all[i], data);
+        } else {
+          all.push(Object.assign({ id: this._bid(), sino: all.length + 1 }, data));
+        }
+        App.Store.setBudget(p.id, all);
+        App.closeModal();
+        App.toast(ed ? 'Budget line updated' : 'Budget line added', desc, 'good');
+        if (App.buildSearchIndex) App.buildSearchIndex();
+        this.render(p, host);
+      });
+
+      const del = $('#blDel');
+      if (del) del.addEventListener('click', () => {
+        App.Store.setBudget(p.id, this.ensureOwn(p).filter(x => x.id !== r.id));
+        App.closeModal();
+        App.toast('Budget line removed', r.description || '', 'warn');
+        this.render(p, host);
+      });
+    }
+  };
+
+  App.ProjectBudget = projectBudget;
+
+
+
   /* ── BUDGET ───────────────────────────────────────────── */
   const budget = {
     state: { q: '', nature: '', type: '', section: '' },

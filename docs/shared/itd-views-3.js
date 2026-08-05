@@ -155,7 +155,7 @@
     detail(p) {
       /* Schedule sits second: after you know what the project is, the next
          question is always whether it is on time. */
-      const tabs = ['Overview', 'Schedule', 'Tasks', 'Milestones', 'Payments', 'Documents', 'Reports', 'Team', 'Activity'];
+      const tabs = ['Overview', 'Schedule', 'Budget', 'Tasks', 'Milestones', 'Payments', 'Documents', 'Reports', 'Team', 'Activity'];
       const active = (App.query().tab || 'overview').toLowerCase();
       $('#page-projects').innerHTML = `
         <a class="btn btn--ghost btn--sm" href="#/projects" style="margin-bottom:1rem"><i class="fa-solid fa-arrow-left"></i> All projects</a>
@@ -187,6 +187,9 @@
         /* Schedule paints itself into the host element, because it owns
            its own chips, filters and modal — so it returns nothing here. */
         schedule: () => '',
+        /* Both paint into the host themselves — they own their own
+           filters and modals, so they return nothing here. */
+        budget: () => '',
         timeline: () => this.tabTimeline(p), tasks: () => this.tabTasks(p),
         milestones: () => this.tabMilestones(p), payments: () => payments.projectPanel(p), documents: () => this.tabDocuments(p),
         reports: () => this.tabReports(p), team: () => this.tabStaff(p), staff: () => this.tabStaff(p),
@@ -194,6 +197,7 @@
       };
       body.innerHTML = (fns[name] || fns.overview)();
       if (name === 'schedule' && App.ProjectSchedule) App.ProjectSchedule.render(p, body);
+      if (name === 'budget' && App.ProjectBudget) App.ProjectBudget.render(p, body);
       if (name === 'milestones') this.bindMilestones(p);
       if (name === 'tasks') this.bindKanban(p);
       if (name === 'overview' && p.live) this.overviewChart();
@@ -652,7 +656,7 @@
           <div class="card"><div class="card__head"><div><h2>By status</h2></div></div><div class="card__body"><div class="chartbox sm"><canvas id="chPayStatus"></canvas></div></div></div>
         </div>
         <div class="tablewrap"><table class="dt">
-          <thead><tr><th>Invoice</th><th>Project</th><th>Client</th><th class="num">Amount</th><th class="num">GST</th><th class="num">Total</th><th>Due</th><th>Status</th></tr></thead>
+          <thead><tr><th>Invoice</th><th>Project</th><th>Client</th><th class="num">Amount</th><th class="num">GST</th><th class="num">Total</th><th>Due</th><th>Status</th><th></th></tr></thead>
           <tbody>${all.slice().sort((a, b) => (b.invoiceDate || '').localeCompare(a.invoiceDate || '')).map(p => {
         const proj = Store.project(p.projectId);
         return `<tr>
@@ -663,10 +667,15 @@
               <td class="num strong">${money(grossAmt(p))}</td>
               <td class="num">${p.dueDate ? shortDate(p.dueDate) : '—'}</td>
               <td>${payStatusPill(p.status)}</td>
+              <td style="white-space:nowrap">
+                <button class="btn btn--ghost btn--sm payEdit" data-id="${esc(p.id)}" title="Edit payment"><i class="fa-solid fa-pen"></i></button>
+              </td>
             </tr>`;
       }).join('')}</tbody>
         </table></div>` : this._empty()}`;
       $('#addPayBtn').addEventListener('click', () => this.openAdd());
+      $$('#page-payments .payEdit').forEach(b => b.addEventListener('click', () =>
+        this.openEdit(Store.payments().find(x => x.id === b.dataset.id))));
       if (all.length) this.charts(all);
     },
     _empty() {
@@ -688,21 +697,28 @@
       const labels = Object.keys(sc);
       chart('chPayStatus', { type: 'doughnut', data: { labels, datasets: [{ data: labels.map(k => sc[k]), backgroundColor: labels.map(k => cmap[k] || t.muted), borderColor: getComputedStyle(document.documentElement).getPropertyValue('--surface'), borderWidth: 2 }] }, options: { responsive: true, maintainAspectRatio: false, cutout: '62%', plugins: { legend: { position: 'right', labels: { boxWidth: 10, boxHeight: 10, padding: 8, font: { size: 11 } } } } } });
     },
-    openAdd(presetProject) {
+    openAdd(presetProject) { this.openForm(presetProject, null); },
+    openEdit(pay) { this.openForm(null, pay); },
+
+    /** One form for add and edit. `existing` is a payment record or null. */
+    openForm(presetProject, existing) {
+      const ed = !!existing, r = existing || {};
       const projOpts = Store.projects().map(p => ({ v: p.id, l: p.name }));
       App.modal({
-        title: 'Add payment',
+        title: ed ? 'Edit payment' : 'Add payment',
         body: `<div class="formgrid">
-          ${field('pyProject', 'Project', presetProject || Store.projects()[0].id, { type: 'select', options: projOpts, req: true })}
-          <div class="formrow">${field('pyInv', 'Invoice number', '', { ph: 'INV-001' })}${field('pyClient', 'Client', '', { ph: 'auto from project' })}</div>
-          <div class="formrow">${field('pyInvDate', 'Invoice date', new Date().toISOString().slice(0, 10), { type: 'date' })}${field('pyDue', 'Due date', '', { type: 'date' })}</div>
-          <div class="formrow">${field('pyAmount', 'Amount (₹)', '', { type: 'number', req: true, attr: 'min="0"', ph: '0' })}${field('pyGst', 'GST %', '18', { type: 'number', attr: 'min="0" max="28"' })}</div>
+          ${field('pyProject', 'Project', r.projectId || presetProject || (Store.projects()[0] || {}).id, { type: 'select', options: projOpts, req: true })}
+          <div class="formrow">${field('pyInv', 'Invoice number', r.invoiceNo || '', { ph: 'INV-001' })}${field('pyClient', 'Client', r.client || '', { ph: 'auto from project' })}</div>
+          <div class="formrow">${field('pyInvDate', 'Invoice date', r.invoiceDate || new Date().toISOString().slice(0, 10), { type: 'date' })}${field('pyDue', 'Due date', '', { type: 'date' })}</div>
+          <div class="formrow">${field('pyAmount', 'Amount (₹)', r.amount != null ? r.amount : '', { type: 'number', req: true, attr: 'min="0"', ph: '0' })}${field('pyGst', 'GST %', '18', { type: 'number', attr: 'min="0" max="28"' })}</div>
           <div class="formrow">${field('pyMethod', 'Payment method', 'Bank Transfer', { type: 'select', options: ['Bank Transfer', 'GPay', 'Cash', 'Cheque', 'UPI'] })}${field('pyStatus', 'Status', 'Pending', { type: 'select', options: PAYSTATUS })}</div>
-          ${field('pyRef', 'Reference number', '', {})}
-          ${field('pyRemarks', 'Remarks', '', { type: 'textarea', rows: 2 })}
+          ${field('pyRef', 'Reference number', r.refNo || '', {})}
+          ${field('pyRemarks', 'Remarks', r.remarks || '', { type: 'textarea', rows: 2 })}
           <label class="field"><span>Attachment</span><div class="dropzone"><i class="fa-solid fa-paperclip"></i> Invoice PDF (stored by name only in this build)</div></label>
         </div>`,
-        footer: `<button class="btn btn--ghost" data-close>Cancel</button><button class="btn btn--accent" id="pySave"><i class="fa-solid fa-check"></i> Save payment</button>`
+        footer: `${ed ? '<button class="btn btn--ghost" id="pyDel" style="color:var(--warn);margin-right:auto"><i class="fa-solid fa-trash"></i> Delete</button>' : ''}
+                 <button class="btn btn--ghost" data-close>Cancel</button>
+                 <button class="btn btn--accent" id="pySave"><i class="fa-solid fa-check"></i> ${ed ? 'Save changes' : 'Save payment'}</button>`
       });
       // auto-fill client from project
       const fillClient = () => { const proj = Store.project($('#pyProject').value); if (proj && !$('#pyClient').value) $('#pyClient').value = proj.client || ''; };
@@ -714,16 +730,36 @@
         const inv = $('#pyInvDate').value, due = $('#pyDue').value;
         if (inv && due) ok = setErr('pyDue', due >= inv ? '' : 'Due date must be after invoice date') && ok;
         if (!ok) return;
-        const pay = {
-          id: genId('pay'), projectId: $('#pyProject').value, invoiceNo: $('#pyInv').value.trim(),
+        const data = {
+          projectId: $('#pyProject').value, invoiceNo: $('#pyInv').value.trim(),
           client: $('#pyClient').value.trim() || (Store.project($('#pyProject').value)?.client || ''),
           invoiceDate: inv, dueDate: due, amount: +amount, gst: +$('#pyGst').value || 0,
           method: $('#pyMethod').value, status: $('#pyStatus').value, refNo: $('#pyRef').value.trim(), remarks: $('#pyRemarks').value.trim()
         };
-        Store.addPayment(pay); App.closeModal(); App.buildSearchIndex(); App.toast('Payment saved', (pay.invoiceNo || '') + ' ₹' + App.inr.format(pay.amount), 'good');
-        if (App.$('.page.is-active')?.dataset.page === 'payments') this.render();
-        else if (App.$('.page.is-active')?.dataset.page === 'projects') project.tab(Store.project(App.param()), 'payments');
+        if (ed) Store.updatePayment(r.id, data);
+        else Store.addPayment(Object.assign({ id: genId('pay') }, data));
+        App.closeModal(); App.buildSearchIndex();
+        App.toast(ed ? 'Payment updated' : 'Payment saved', (data.invoiceNo || '') + ' ₹' + App.inr.format(data.amount), 'good');
+        this._after();
       });
+
+      const del = $('#pyDel');
+      if (del) del.addEventListener('click', () => {
+        Store.deletePayment(r.id);
+        App.closeModal(); App.buildSearchIndex();
+        App.toast('Payment deleted', r.invoiceNo || '', 'warn');
+        this._after();
+      });
+    },
+
+    /* Repaint whichever surface the user is looking at. */
+    _after() {
+      const page = App.$('.page.is-active')?.dataset.page;
+      if (page === 'payments') this.render();
+      else if (page === 'projects') {
+        const p = Store.project(App.param());
+        if (p) project.tab(p, 'payments');
+      }
     },
     /* Per-project Payments tab */
     projectPanel(p) {

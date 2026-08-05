@@ -49,10 +49,47 @@ const copyDir = (from, to) => {
   return n;
 };
 
-fs.rmSync(OUT, { recursive: true, force: true });
-const app = copyDir(APP, OUT);
-const shared = copyDir(SHARED, path.join(OUT, 'shared'));
+/* Copy over the existing output, then prune what is no longer produced.
 
-console.log(`\n  InTandem Desk · Admin Web${preview ? '  (PREVIEW — unconfigured)' : ''}`);
-console.log(`  ${app} app + ${shared} shared files → docs/\n`);
-if (preview) console.log('  ⚠  Sign-in will show "Setup required". Do not deploy this.\n');
+   NOT rmSync-then-copy. That leaves a window — small, but real — where
+   docs/index.html does not exist, and anything hitting the dev server in
+   that moment gets a 404. It happens whenever a build overlaps a watcher
+   rebuild, which is exactly when you are working fastest. */
+const expected = new Set();
+const copyTracked = (from, to, prefix) => {
+  fs.mkdirSync(to, { recursive: true });
+  /* Register the destination directory itself, not just its contents.
+     Without this, prune sees `shared/` as unexpected and deletes the
+     whole tree — which is precisely what happened the first time. */
+  if (prefix) expected.add(prefix);
+  let n = 0;
+  for (const e of fs.readdirSync(from, { withFileTypes: true })) {
+    const s = path.join(from, e.name), d = path.join(to, e.name);
+    const rel = prefix ? prefix + '/' + e.name : e.name;
+    if (e.isDirectory()) { expected.add(rel); n += copyTracked(s, d, rel); }
+    else { fs.copyFileSync(s, d); expected.add(rel); n++; }
+  }
+  return n;
+};
+
+const app = copyTracked(APP, OUT, '');
+const shared = copyTracked(SHARED, path.join(OUT, 'shared'), 'shared');
+
+/* Remove anything left from a previous build that the sources no longer
+   contain — a renamed or deleted file must not linger in the output. */
+let pruned = 0;
+const prune = (dir, prefix) => {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix ? prefix + '/' + e.name : e.name;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (!expected.has(rel)) { fs.rmSync(full, { recursive: true, force: true }); pruned++; }
+      else prune(full, rel);
+    } else if (!expected.has(rel)) { fs.rmSync(full, { force: true }); pruned++; }
+  }
+};
+if (fs.existsSync(OUT)) prune(OUT, '');
+
+console.log(`\n  InTandem Desk · Admin Web${preview ? '  (preview)' : ''}`);
+console.log(`  ${app} app + ${shared} shared files → docs/${pruned ? `  (${pruned} stale removed)` : ''}\n`);
+if (preview && !configured) console.log('  ⚠  Firebase not configured — sign-in will show "Setup required".\n');

@@ -215,7 +215,34 @@ window.App = (function () {
     updateTask(pid, tid, patch) { const a = this.tasks(pid); const i = a.findIndex(t => t.id === tid); if (i >= 0) { a[i] = { ...a[i], ...patch }; this.setTasks(pid, a); } },
     payments(pid) { const a = store.get('payments', []); return pid ? a.filter(p => p.projectId === pid) : a; },
     addPayment(p) { const a = store.get('payments', []); a.push(p); store.set('payments', a); logActivity(p.projectId, 'Payment recorded — ₹' + inr.format(p.amount)); notifyPush({ type: 'payment', icon: 'fa-indian-rupee-sign', title: 'Payment recorded', body: (p.invoiceNo ? p.invoiceNo + ' · ' : '') + '₹' + inr.format(p.amount), route: '#/payments' }); },
+    updatePayment(id, patch) {
+      const a = store.get('payments', []);
+      const i = a.findIndex(x => x.id === id);
+      if (i < 0) return null;
+      a[i] = { ...a[i], ...patch, updated: new Date().toISOString() };
+      store.set('payments', a);
+      logActivity(a[i].projectId, 'Payment updated — ' + (a[i].invoiceNo || '₹' + inr.format(a[i].amount)));
+      return a[i];
+    },
+    deletePayment(id) {
+      const a = store.get('payments', []);
+      const p = a.find(x => x.id === id);
+      store.set('payments', a.filter(x => x.id !== id));
+      if (p) logActivity(p.projectId, 'Payment deleted — ' + (p.invoiceNo || '₹' + inr.format(p.amount)));
+      return p;
+    },
+
     activity(pid) { return store.get('activity', {})[pid] || []; },
+
+    /* ── Per-project budget ────────────────────────────────────────
+       Same shape as the workbook budget rows, keyed by project.
+
+         itd.budgets  { [projectId]: [ line, … ] }
+
+       line  id · section · description · nature · vendor · type
+             status · quoteNoGst · quoteGst · released · balance · comments  */
+    budget(pid) { return store.get('budgets', {})[pid] || []; },
+    setBudget(pid, arr) { const all = store.get('budgets', {}); all[pid] = arr; store.set('budgets', all); },
 
     /* ── Per-project schedule ──────────────────────────────────────
        Keyed by project id, so one project's schedule can never appear

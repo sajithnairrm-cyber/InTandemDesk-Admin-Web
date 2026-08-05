@@ -102,66 +102,131 @@
   };
   App.register('vendors', vendors);
 
-  /* ── LEDGER ───────────────────────────────────────────── */
+  /* ── LEDGER ───────────────────────────────────────────────────────
+     Every movement of money, both directions:
+
+       out — vendor payments from the parsed workbook (window.DATA.ledger)
+       in  — client payments recorded in the Payments module (Store)
+
+     Before this, the ledger read only window.DATA.ledger, so a payment
+     you recorded against a client never appeared here. That was the gap,
+     not a bug: the two lived in different stores and nothing joined them.
+
+     Derive.* still computes vendor rollups from window.DATA.ledger alone,
+     so vendor balances and the account drill-down are unaffected by
+     client receipts. */
   const ledger = {
-    state: { q: '', vendor: '', mode: '', account: '' },
+    state: { q: '', vendor: '', mode: '', account: '', dir: '' },
+
+    /** Client payments, shaped like ledger rows so one renderer serves both. */
+    _incoming() {
+      return App.Store.payments().map(p => {
+        const proj = App.Store.project(p.projectId);
+        return {
+          id: p.id, dir: 'in',
+          date: p.invoiceDate || p.dueDate || '',
+          vendor: p.client || (proj && proj.client) || 'Client',
+          vendorRaw: '', towards: (p.invoiceNo ? p.invoiceNo + ' · ' : '') + (p.remarks || 'Client payment'),
+          amount: Number(p.amount) || 0,
+          account: proj ? proj.name : 'Client receipts',
+          mode: p.method || '—',
+          status: p.status || ''
+        };
+      });
+    },
+
+    _all() {
+      const out = D.ledger.map(t => Object.assign({ dir: 'out' }, t));
+      return out.concat(this._incoming()).filter(t => t.date);
+    },
+
     mount() {
-      /* First run: no transactions yet. */
-      if (!D.ledger.length) {
+      const all = this._all();
+
+      if (!all.length) {
         $('#page-ledger').innerHTML = `
-          <div class="phead"><div><p class="eyebrow">Payment ledger</p><h1>Vendor payment ledger</h1>
+          <div class="phead"><div><p class="eyebrow">Payment ledger</p><h1>Payment ledger</h1>
             <p class="phead__sub">No transactions recorded</p></div></div>
           ${App.empty('No ledger entries recorded.', {
             icon: 'fa-receipt',
-            hint: 'Every payment released to a vendor will be listed here, grouped by month.'
+            hint: 'Vendor payments and client receipts both appear here, newest month first.'
           })}`;
         return;
       }
-      const modes = [...new Set(D.ledger.map(t => t.mode))].sort();
-      const accounts = [...new Set(D.ledger.map(t => t.account).filter(Boolean))].sort();
+
+      const modes = [...new Set(all.map(t => t.mode).filter(Boolean))].sort();
+      const accounts = [...new Set(all.map(t => t.account).filter(Boolean))].sort();
+      const dates = all.map(t => t.date).sort();
+      const inTotal = all.filter(t => t.dir === 'in').reduce((s, t) => s + t.amount, 0);
+      const outTotal = all.filter(t => t.dir === 'out').reduce((s, t) => s + t.amount, 0);
+      const net = inTotal - outTotal;
+
       $('#page-ledger').innerHTML = `
-        <div class="phead"><div><p class="eyebrow">Payment ledger</p><h1>Vendor payment ledger</h1>
-          <p class="phead__sub">${D.ledger.length} transactions · ${money(Derive.ledgerTotal, true)} released · ${shortDate(D.ledger[0].date)} → ${shortDate(D.ledger[D.ledger.length - 1].date)}</p></div></div>
-        <div class="card mb"><div class="card__head"><div><h2>Monthly spend</h2><p class="sub">Released per month</p></div></div><div class="card__body"><div class="chartbox sm"><canvas id="chLedger"></canvas></div></div></div>
+        <div class="phead"><div><p class="eyebrow">Payment ledger</p><h1>Payment ledger</h1>
+          <p class="phead__sub">${all.length} transactions · ${shortDate(dates[0])} → ${shortDate(dates[dates.length - 1])}</p></div></div>
+
+        <div class="grid g-3 mb">
+          <div class="kpi"><div class="kpi__top"><span class="kpi__icon teal"><i class="fa-solid fa-arrow-down"></i></span></div>
+            <div><div class="kpi__label">Received from clients</div><div class="kpi__value">${money(inTotal, true)}</div></div>
+            <div class="kpi__foot">${all.filter(t => t.dir === 'in').length} receipts</div></div>
+          <div class="kpi"><div class="kpi__top"><span class="kpi__icon coral"><i class="fa-solid fa-arrow-up"></i></span></div>
+            <div><div class="kpi__label">Released to vendors</div><div class="kpi__value">${money(outTotal, true)}</div></div>
+            <div class="kpi__foot">${all.filter(t => t.dir === 'out').length} payments</div></div>
+          <div class="kpi"><div class="kpi__top"><span class="kpi__icon ${net >= 0 ? '' : 'coral'}"><i class="fa-solid fa-scale-balanced"></i></span></div>
+            <div><div class="kpi__label">Net position</div><div class="kpi__value" style="color:${net >= 0 ? 'var(--settled)' : 'var(--warn)'}">${money(net, true)}</div></div>
+            <div class="kpi__foot">in minus out</div></div>
+        </div>
+
+        <div class="card mb"><div class="card__head"><div><h2>Monthly vendor spend</h2><p class="sub">Released per month</p></div></div><div class="card__body"><div class="chartbox sm"><canvas id="chLedger"></canvas></div></div></div>
         <div class="chipbar">
-          <div class="search__field" style="max-width:260px"><i class="fa-solid fa-magnifying-glass"></i><input id="lq" placeholder="Search vendor or note…"></div>
+          <div class="search__field" style="max-width:260px"><i class="fa-solid fa-magnifying-glass"></i><input id="lq" placeholder="Search party or note…"></div>
+          <select class="chip" id="ldir"><option value="">Both directions</option><option value="in">Money in</option><option value="out">Money out</option></select>
           <select class="chip" id="lmode"><option value="">All modes</option>${modes.map(m => `<option>${esc(m)}</option>`).join('')}</select>
           <select class="chip" id="lacct" style="max-width:220px"><option value="">All accounts</option>${accounts.map(a => `<option>${esc(a)}</option>`).join('')}</select>
         </div>
         <div id="ledgerBody"></div>`;
+
       $('#lq').addEventListener('input', e => { this.state.q = e.target.value.toLowerCase(); this.renderBody(); });
+      $('#ldir').addEventListener('change', e => { this.state.dir = e.target.value; this.renderBody(); });
       $('#lmode').addEventListener('change', e => { this.state.mode = e.target.value; this.renderBody(); });
       $('#lacct').addEventListener('change', e => { this.state.account = e.target.value; this.renderBody(); });
       this.charts();
       this.renderBody();
     },
+
     rows() {
       const s = this.state;
-      return D.ledger.filter(t =>
+      return this._all().filter(t =>
         (!s.q || (t.vendor || '').toLowerCase().includes(s.q) || (t.towards || '').toLowerCase().includes(s.q) || (t.vendorRaw || '').toLowerCase().includes(s.q)) &&
+        (!s.dir || t.dir === s.dir) &&
         (!s.mode || t.mode === s.mode) && (!s.account || t.account === s.account));
     },
+
     renderBody() {
       const rows = this.rows();
-      // group by month, newest first
       const groups = {};
       rows.forEach(t => { const k = App.monthKey(t.date); (groups[k] = groups[k] || []).push(t); });
       const keys = Object.keys(groups).sort().reverse();
-      const total = rows.reduce((s, t) => s + t.amount, 0);
-      $('#ledgerBody').innerHTML = `<p class="muted" style="font-size:12.5px; margin:0 0 .5rem">${rows.length} transactions · ${money(total)}</p>` +
+      const inT = rows.filter(t => t.dir === 'in').reduce((s, t) => s + t.amount, 0);
+      const outT = rows.filter(t => t.dir === 'out').reduce((s, t) => s + t.amount, 0);
+
+      $('#ledgerBody').innerHTML =
+        `<p class="muted" style="font-size:12.5px; margin:0 0 .5rem">${rows.length} transactions · <span style="color:var(--settled)">${money(inT)} in</span> · <span style="color:var(--warn)">${money(outT)} out</span></p>` +
         (keys.length ? keys.map(k => {
           const items = groups[k].slice().sort((a, b) => b.date.localeCompare(a.date));
-          const mt = items.reduce((s, t) => s + t.amount, 0);
-          return `<div class="monthhead"><h3>${monthLabel(k)}</h3><span class="tot">${items.length} txns · <b>${money(mt)}</b></span></div>
+          const mIn = items.filter(t => t.dir === 'in').reduce((s, t) => s + t.amount, 0);
+          const mOut = items.filter(t => t.dir === 'out').reduce((s, t) => s + t.amount, 0);
+          return `<div class="monthhead"><h3>${monthLabel(k)}</h3><span class="tot">${items.length} txns · <b style="color:var(--settled)">+${money(mIn, true)}</b> / <b style="color:var(--warn)">−${money(mOut, true)}</b></span></div>
           <div class="tablewrap"><table class="dt">
-            <thead><tr><th style="width:100px">Date</th><th>Vendor</th><th>Towards</th><th>Account</th><th class="num">Amount</th><th>Mode</th></tr></thead>
+            <thead><tr><th style="width:100px">Date</th><th style="width:44px"></th><th>Party</th><th>Towards</th><th>Account / project</th><th class="num">Amount</th><th>Mode</th></tr></thead>
             <tbody>${items.map(t => `
               <tr>
                 <td class="num">${shortDate(t.date)}</td>
+                <td><span class="pill ${t.dir === 'in' ? 'completed' : 'due'}" title="${t.dir === 'in' ? 'Received from client' : 'Released to vendor'}" style="padding:.1rem .4rem"><i class="fa-solid fa-arrow-${t.dir === 'in' ? 'down' : 'up'}" style="font-size:8px"></i></span></td>
                 <td class="strong">${esc(t.vendor || '—')}${t.vendorRaw && t.vendorRaw !== t.vendor ? ` <span class="faint" style="font-size:10px">(${esc(t.vendorRaw)})</span>` : ''}</td>
                 <td>${esc(t.towards || '—')}</td>
                 <td><span class="faint" style="font-size:11px">${esc(t.account || '—')}</span></td>
-                <td class="num">${money(t.amount)}</td>
+                <td class="num" style="color:${t.dir === 'in' ? 'var(--settled)' : 'var(--ink)'}">${t.dir === 'in' ? '+' : ''}${money(t.amount)}</td>
                 <td><span class="tag">${esc(t.mode)}</span></td>
               </tr>`).join('')}
             </tbody>
