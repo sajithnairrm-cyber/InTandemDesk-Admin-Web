@@ -214,7 +214,7 @@
           ${settleBar(D.meta.balanceReleased, D.meta.balanceReleased + D.meta.balanceOutstanding, { lg: true })}
         </div>
         <div class="grid g-4 mb">
-          <a class="kpi" href="#/budget" style="cursor:pointer"><div class="kpi__label">Budget lines</div><div class="kpi__value">${D.budget.length}</div><div class="kpi__foot">Open budget →</div></a>
+          <a class="kpi" href="#/projects/${p.id}?tab=budget" style="cursor:pointer"><div class="kpi__label">Budget lines</div><div class="kpi__value">${D.budget.length}</div><div class="kpi__foot">Open budget →</div></a>
           <a class="kpi" href="#/projects/${p.id}?tab=schedule" style="cursor:pointer"><div class="kpi__label">Schedule tasks</div><div class="kpi__value">${D.schedule.length}</div><div class="kpi__foot">Open schedule →</div></a>
           <a class="kpi" href="#/vendors" style="cursor:pointer"><div class="kpi__label">Vendor accounts</div><div class="kpi__value">${D.vendors.length}</div><div class="kpi__foot">Open vendors →</div></a>
           <a class="kpi" href="#/ledger" style="cursor:pointer"><div class="kpi__label">Transactions</div><div class="kpi__value">${D.ledger.length}</div><div class="kpi__foot">Open ledger →</div></a>
@@ -629,25 +629,107 @@
   const grossAmt = p => (p.amount || 0) + gstAmt(p);
 
   const payments = {
-    mount() { this.render(); },
+    /* ── Filter state ───────────────────────────────────────
+       Persisted under itd.pay.filters so a filtered view survives
+       navigating away and back, and paging keeps the filters.
+       Status is ONE field — the quick chips and the Status dropdown
+       are two controls over the same value, so they can never
+       contradict each other. */
+    DEFAULTS: {
+      q: '', project: '', client: '', status: '',
+      from: '', to: '', due: '', min: '', max: '',
+      sortKey: 'invoiceDate', sortDir: -1, page: 1, per: 25
+    },
+    state: null,
+    advOpen: false,
+    CHIPS: ['All', 'Paid', 'Partial', 'Pending', 'Overdue'],
+
+    loadState() {
+      this.state = Object.assign({}, this.DEFAULTS, App.store.get('pay.filters', {}));
+      return this.state;
+    },
+    saveState() { App.store.set('pay.filters', this.state); },
+    resetState() { this.state = Object.assign({}, this.DEFAULTS); this.saveState(); },
+
+    mount() { this.loadState(); this.render(); },
     refresh() { this.render(); },
+
+    /* ── Filtering ──────────────────────────────────────────
+       Every filter combines (AND). One pass over the array, so the
+       cost stays linear as the invoice count grows. */
+    filtered() {
+      const s = this.state;
+      const q = (s.q || '').trim().toLowerCase();
+      const today = new Date().toISOString().slice(0, 10);
+      const plus = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+      const weekEnd = plus(6);
+      const monthStart = today.slice(0, 8) + '01';
+      const monthEnd = (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10); })();
+
+      const rows = Store.payments().filter(p => {
+        if (q) {
+          const proj = Store.project(p.projectId);
+          const hay = ((p.invoiceNo || '') + ' ' + ((proj && proj.name) || '') + ' ' + (p.client || '')).toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        if (s.project && p.projectId !== s.project) return false;
+        if (s.client && (p.client || '') !== s.client) return false;
+        if (s.status && p.status !== s.status) return false;
+        if (s.from && (p.invoiceDate || '') < s.from) return false;
+        if (s.to && (p.invoiceDate || '') > s.to) return false;
+
+        if (s.due) {
+          const d = p.dueDate || '';
+          if (!d) return false;
+          if (s.due === 'today' && d !== today) return false;
+          if (s.due === 'week' && !(d >= today && d <= weekEnd)) return false;
+          if (s.due === 'month' && !(d >= monthStart && d <= monthEnd)) return false;
+          /* Overdue = past its due date AND not settled. A paid invoice
+             with an old due date is not overdue. */
+          if (s.due === 'overdue' && !(d < today && !paidStates.includes(p.status))) return false;
+        }
+
+        const total = grossAmt(p);
+        if (s.min !== '' && total < +s.min) return false;
+        if (s.max !== '' && total > +s.max) return false;
+        return true;
+      });
+
+      const dir = s.sortDir, key = s.sortKey;
+      const val = p => {
+        if (key === 'project') { const pr = Store.project(p.projectId); return (pr && pr.name) || ''; }
+        if (key === 'total') return grossAmt(p);
+        if (key === 'gst') return p.gst || 0;
+        if (key === 'amount') return p.amount || 0;
+        return p[key] == null ? '' : p[key];
+      };
+      rows.sort((a, b) => {
+        const x = val(a), y = val(b);
+        if (typeof x === 'number' && typeof y === 'number') return (x - y) * dir;
+        return String(x).localeCompare(String(y)) * dir;
+      });
+      return rows;
+    },
+
     render() {
+      if (!this.state) this.loadState();
       const all = Store.payments();
       const projects = Store.projects();
       const value = projects.reduce((s, p) => s + (p.budget || 0), 0);
       const received = all.filter(p => paidStates.includes(p.status)).reduce((s, p) => s + grossAmt(p), 0);
       const pending = all.filter(p => p.status === 'Pending').reduce((s, p) => s + grossAmt(p), 0);
       const overdue = all.filter(p => p.status === 'Overdue').reduce((s, p) => s + grossAmt(p), 0);
-      const collPct = value ? Math.round(received / value * 100) : 0;
+      const collPct = App.pctOf(received, value);
+
       $('#page-payments').innerHTML = `
         <div class="phead"><div><p class="eyebrow">Client payments</p><h1>Payments</h1>
-          <p class="phead__sub">Invoicing & collections · always linked to a project</p></div>
+          <p class="phead__sub">Invoicing &amp; collections · always linked to a project</p></div>
           <div class="phead__actions"><button class="btn btn--accent" id="addPayBtn"><i class="fa-solid fa-plus"></i> Add payment</button></div>
         </div>
         <div class="grid g-4 mb">
-          <div class="kpi"><div class="kpi__top"><span class="kpi__icon"><i class="fa-solid fa-sack-dollar"></i></span></div><div><div class="kpi__label">Total project value</div><div class="kpi__value">${money(value, true)}</div></div><div class="kpi__foot">tracked budgets</div></div>
+          <div class="kpi"><div class="kpi__top"><span class="kpi__icon"><i class="fa-solid fa-sack-dollar"></i></span></div><div><div class="kpi__label">Total project value</div><div class="kpi__value">${money(value, true)}</div></div><div class="kpi__foot">${projects.length} projects</div></div>
           <div class="kpi"><div class="kpi__top"><span class="kpi__icon teal"><i class="fa-solid fa-hand-holding-dollar"></i></span></div><div><div class="kpi__label">Received</div><div class="kpi__value">${money(received, true)}</div></div><div class="kpi__foot">${collPct}% collected</div></div>
-          <div class="kpi"><div class="kpi__top"><span class="kpi__icon blue"><i class="fa-solid fa-hourglass-half"></i></span></div><div><div class="kpi__label">Pending</div><div class="kpi__value">${money(pending, true)}</div></div><div class="kpi__foot">awaiting collection</div></div>
+          <div class="kpi"><div class="kpi__top"><span class="kpi__icon blue"><i class="fa-solid fa-hourglass-half"></i></span></div><div><div class="kpi__label">Pending</div><div class="kpi__value">${money(pending, true)}</div></div><div class="kpi__foot">awaiting payment</div></div>
           <div class="kpi"><div class="kpi__top"><span class="kpi__icon coral"><i class="fa-solid fa-triangle-exclamation"></i></span></div><div><div class="kpi__label">Overdue</div><div class="kpi__value">${money(overdue, true)}</div></div><div class="kpi__foot">past due date</div></div>
         </div>
         ${all.length ? `
@@ -655,29 +737,305 @@
           <div class="card"><div class="card__head"><div><h2>Monthly collections</h2><p class="sub">Received per month</p></div></div><div class="card__body"><div class="chartbox sm"><canvas id="chPayMonth"></canvas></div></div></div>
           <div class="card"><div class="card__head"><div><h2>By status</h2></div></div><div class="card__body"><div class="chartbox sm"><canvas id="chPayStatus"></canvas></div></div></div>
         </div>
-        <div class="tablewrap"><table class="dt">
-          <thead><tr><th>Invoice</th><th>Project</th><th>Client</th><th class="num">Amount</th><th class="num">GST</th><th class="num">Total</th><th>Due</th><th>Status</th><th></th></tr></thead>
-          <tbody>${all.slice().sort((a, b) => (b.invoiceDate || '').localeCompare(a.invoiceDate || '')).map(p => {
+        ${this.toolbar(all)}
+        <div id="payTableHost"></div>` : this._empty()}`;
+
+      $('#addPayBtn').addEventListener('click', () => this.openAdd());
+      if (all.length) { this.bindToolbar(); this.renderTable(); this.charts(all); }
+    },
+
+    /* ── Toolbar ────────────────────────────────────────────
+       Quick chips for the common case; a collapsible panel holds the
+       rest so the page stays calm until you need them. */
+    toolbar(all) {
+      const s = this.state;
+      const projOpts = Store.projects();
+      const clients = [...new Set(all.map(p => p.client).filter(Boolean))].sort();
+      const counts = { All: all.length };
+      this.CHIPS.slice(1).forEach(c => { counts[c] = all.filter(p => p.status === c).length; });
+      const chip = c => `<button class="chip ${(s.status || 'All') === c ? 'is-active' : ''}" data-chip="${esc(c)}">${esc(c)} <span class="chip__n">${counts[c] || 0}</span></button>`;
+      const badge = this.activeCount() ? ` <span class="chip__n">${this.activeCount()}</span>` : '';
+
+      return `
+        <div class="chipbar" style="margin-bottom:.8rem">
+          ${this.CHIPS.map(chip).join('')}
+          <span style="flex:1"></span>
+          <button class="chip" id="payAdvToggle" aria-expanded="${this.advOpen}"><i class="fa-solid fa-sliders"></i> Filters${badge}</button>
+        </div>
+
+        <div class="card mb" id="payAdv" ${this.advOpen ? '' : 'hidden'}>
+          <div class="card__body">
+            <div class="filterbar">
+              <label class="field"><span>Search</span><input id="fq" type="search" placeholder="Invoice no, project or client…" value="${esc(s.q)}"></label>
+              <label class="field"><span>Project</span><select id="fproject"><option value="">All projects</option>${projOpts.map(p => `<option value="${esc(p.id)}" ${s.project === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+              <label class="field"><span>Client</span><select id="fclient"><option value="">All clients</option>${clients.map(c => `<option ${s.client === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
+              <label class="field"><span>Status</span><select id="fstatus"><option value="">All</option>${PAYSTATUS.map(c => `<option ${s.status === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
+              <label class="field"><span>Invoice date from</span><input id="ffrom" type="date" value="${esc(s.from)}"></label>
+              <label class="field"><span>Invoice date to</span><input id="fto" type="date" value="${esc(s.to)}"></label>
+              <label class="field"><span>Due date</span><select id="fdue">
+                <option value="">All</option>
+                <option value="today" ${s.due === 'today' ? 'selected' : ''}>Due today</option>
+                <option value="week" ${s.due === 'week' ? 'selected' : ''}>Due this week</option>
+                <option value="month" ${s.due === 'month' ? 'selected' : ''}>Due this month</option>
+                <option value="overdue" ${s.due === 'overdue' ? 'selected' : ''}>Overdue</option>
+              </select></label>
+              <label class="field"><span>Min total (₹)</span><input id="fmin" type="number" min="0" placeholder="0" value="${esc(s.min)}"></label>
+              <label class="field"><span>Max total (₹)</span><input id="fmax" type="number" min="0" placeholder="Any" value="${esc(s.max)}"></label>
+            </div>
+            <div class="toolbar" style="justify-content:flex-end; gap:.5rem; margin-top:.4rem">
+              <button class="btn btn--ghost btn--sm" id="fReset"><i class="fa-solid fa-arrow-rotate-left"></i> Reset filters</button>
+              <button class="btn btn--accent btn--sm" id="fApply"><i class="fa-solid fa-filter"></i> Apply filters</button>
+            </div>
+          </div>
+        </div>`;
+    },
+
+    /** How many filters are narrowing the list — shown on the Filters chip. */
+    activeCount() {
+      const s = this.state, d = this.DEFAULTS;
+      return ['q', 'project', 'client', 'status', 'from', 'to', 'due', 'min', 'max']
+        .filter(k => s[k] !== d[k]).length;
+    },
+
+    bindToolbar() {
+      const rerender = () => { this.saveState(); this.renderTable(); this.repaintToolbar(); };
+
+      $$('#page-payments [data-chip]').forEach(b => b.addEventListener('click', () => {
+        this.state.status = b.dataset.chip === 'All' ? '' : b.dataset.chip;
+        this.state.page = 1;
+        const sel = $('#fstatus'); if (sel) sel.value = this.state.status;
+        rerender();
+      }));
+
+      const adv = $('#payAdv'), toggle = $('#payAdvToggle');
+      if (toggle) toggle.addEventListener('click', () => {
+        this.advOpen = !this.advOpen;
+        adv.hidden = !this.advOpen;
+        toggle.setAttribute('aria-expanded', String(this.advOpen));
+      });
+
+      /* Apply is explicit, as specified. Search still filters as you type,
+         because a search box that needs a button feels broken. */
+      const qEl = $('#fq');
+      if (qEl) qEl.addEventListener('input', () => { this.state.q = qEl.value; this.state.page = 1; rerender(); });
+
+      $('#fApply') && $('#fApply').addEventListener('click', () => {
+        const g = id => { const e = $('#' + id); return e ? e.value : ''; };
+        Object.assign(this.state, {
+          project: g('fproject'), client: g('fclient'), status: g('fstatus'),
+          from: g('ffrom'), to: g('fto'), due: g('fdue'),
+          min: g('fmin'), max: g('fmax'), page: 1
+        });
+        rerender();
+        App.toast('Filters applied', this.filtered().length + ' of ' + Store.payments().length + ' invoices', 'good');
+      });
+
+      $('#fReset') && $('#fReset').addEventListener('click', () => {
+        const open = this.advOpen;
+        this.resetState();
+        this.advOpen = open;
+        this.render();
+        App.toast('Filters cleared', '', 'good');
+      });
+    },
+
+    /** Repaint chips and the filter badge without disturbing focus. */
+    repaintToolbar() {
+      $$('#page-payments [data-chip]').forEach(b =>
+        b.classList.toggle('is-active', (this.state.status || 'All') === b.dataset.chip));
+      const t = $('#payAdvToggle');
+      if (t) {
+        const n = this.activeCount();
+        t.innerHTML = `<i class="fa-solid fa-sliders"></i> Filters${n ? ` <span class="chip__n">${n}</span>` : ''}`;
+      }
+    },
+
+    /* ── Table ──────────────────────────────────────────────── */
+    renderTable() {
+      const s = this.state;
+      const rows = this.filtered();
+      const grand = Store.payments().length;
+      const total = rows.length;
+      const per = +s.per || 25;
+      const pages = Math.max(1, Math.ceil(total / per));
+      if (s.page > pages) s.page = pages;
+      const from = (s.page - 1) * per;
+      const slice = rows.slice(from, from + per);
+
+      const th = (k, l, num) => `<th class="${num ? 'num' : ''}" data-k="${k}">${l}${s.sortKey === k ? `<span class="caret">${s.sortDir > 0 ? '▲' : '▼'}</span>` : ''}</th>`;
+
+      const body = total ? `<div class="tablewrap tablewrap--tall"><table class="dt">
+          <thead><tr>
+            ${th('invoiceNo', 'Invoice')}${th('project', 'Project')}${th('client', 'Client')}
+            ${th('amount', 'Amount', 1)}${th('gst', 'GST', 1)}${th('total', 'Total', 1)}
+            ${th('dueDate', 'Due')}${th('status', 'Status')}
+            <th class="no-sort" style="text-align:right">Actions</th>
+          </tr></thead>
+          <tbody>${slice.map(p => {
         const proj = Store.project(p.projectId);
         return `<tr>
               <td class="strong">${esc(p.invoiceNo || '—')}<div class="faint" style="font-size:11px">${p.invoiceDate ? shortDate(p.invoiceDate) : ''}</div></td>
-              <td>${proj ? `<a href="#/projects/${proj.id}" style="color:var(--accent)">${esc(proj.name)}</a>` : '—'}</td>
+              <td>${proj ? `<a href="#/projects/${esc(proj.id)}" style="color:var(--accent)">${esc(proj.name)}</a>` : '<span class="faint">—</span>'}</td>
               <td>${esc(p.client || '—')}</td>
-              <td class="num">${money(p.amount)}</td><td class="num faint">${p.gst ? p.gst + '%' : '—'}</td>
+              <td class="num">${money(p.amount)}</td>
+              <td class="num faint">${p.gst ? p.gst + '%' : '—'}</td>
               <td class="num strong">${money(grossAmt(p))}</td>
               <td class="num">${p.dueDate ? shortDate(p.dueDate) : '—'}</td>
               <td>${payStatusPill(p.status)}</td>
-              <td style="white-space:nowrap">
-                <button class="btn btn--ghost btn--sm payEdit" data-id="${esc(p.id)}" title="Edit payment"><i class="fa-solid fa-pen"></i></button>
+              <td class="rowacts">
+                <button class="iconbtn payAct" data-act="view" data-id="${esc(p.id)}" title="View"><i class="fa-solid fa-eye"></i></button>
+                <button class="iconbtn payAct" data-act="edit" data-id="${esc(p.id)}" title="Edit"><i class="fa-solid fa-pen"></i></button>
+                <button class="iconbtn payAct" data-act="pdf" data-id="${esc(p.id)}" title="Download PDF"><i class="fa-solid fa-file-pdf"></i></button>
+                <button class="iconbtn payAct" data-act="dup" data-id="${esc(p.id)}" title="Duplicate"><i class="fa-solid fa-copy"></i></button>
+                <button class="iconbtn payAct" data-act="del" data-id="${esc(p.id)}" title="Delete"><i class="fa-solid fa-trash" style="color:var(--warn)"></i></button>
               </td>
             </tr>`;
       }).join('')}</tbody>
-        </table></div>` : this._empty()}`;
-      $('#addPayBtn').addEventListener('click', () => this.openAdd());
-      $$('#page-payments .payEdit').forEach(b => b.addEventListener('click', () =>
-        this.openEdit(Store.payments().find(x => x.id === b.dataset.id))));
-      if (all.length) this.charts(all);
+        </table></div>
+        ${pages > 1 ? `<div class="pager">
+          <button class="pager__btn" data-pg="prev" ${s.page === 1 ? 'disabled' : ''}>‹</button>
+          ${Array.from({ length: pages }, (_, i) => i + 1)
+          .filter(n => n === 1 || n === pages || Math.abs(n - s.page) <= 2)
+          .map((n, i, a) => (i && n - a[i - 1] > 1 ? '<span class="pager__btn" style="border:0;background:none">…</span>' : '') +
+            `<button class="pager__btn ${n === s.page ? 'is-active' : ''}" data-pg="${n}">${n}</button>`).join('')}
+          <button class="pager__btn" data-pg="next" ${s.page === pages ? 'disabled' : ''}>›</button>
+        </div>` : ''}`
+        : App.empty('No invoices match these filters.', {
+          icon: 'fa-filter-circle-xmark',
+          hint: 'Try widening the date range, clearing the status, or resetting the filters.',
+          action: `<button class="btn btn--ghost btn--sm" id="fResetInline"><i class="fa-solid fa-arrow-rotate-left"></i> Reset filters</button>`
+        });
+
+      $('#payTableHost').innerHTML = `
+        <div class="toolbar" style="justify-content:space-between; margin-bottom:.6rem">
+          <p class="muted" style="font-size:12.5px;margin:0">
+            ${total ? `Showing <b>${from + 1}–${Math.min(from + per, total)}</b> of <b>${total}</b>` : 'No records found'}
+            ${total !== grand ? ` <span class="faint">(filtered from ${grand})</span>` : ''}
+          </p>
+          <label class="field" style="margin:0; display:flex; align-items:center; gap:.5rem">
+            <span style="margin:0; white-space:nowrap">Rows</span>
+            <select id="payPer" style="width:auto">${[10, 25, 50, 100].map(n => `<option ${per === n ? 'selected' : ''}>${n}</option>`).join('')}</select>
+          </label>
+        </div>
+        ${body}`;
+
+      this.bindTable();
     },
+
+    bindTable() {
+      const s = this.state;
+      $$('#payTableHost thead th[data-k]').forEach(th => th.addEventListener('click', () => {
+        const k = th.dataset.k;
+        if (s.sortKey === k) s.sortDir *= -1; else { s.sortKey = k; s.sortDir = 1; }
+        this.saveState(); this.renderTable();
+      }));
+      const per = $('#payPer');
+      if (per) per.addEventListener('change', e => { s.per = +e.target.value; s.page = 1; this.saveState(); this.renderTable(); });
+      $$('#payTableHost [data-pg]').forEach(b => b.addEventListener('click', () => {
+        const v = b.dataset.pg;
+        const pages = Math.max(1, Math.ceil(this.filtered().length / (+s.per || 25)));
+        if (v === 'prev') s.page = Math.max(1, s.page - 1);
+        else if (v === 'next') s.page = Math.min(pages, s.page + 1);
+        else s.page = +v;
+        this.saveState(); this.renderTable();
+      }));
+      const ri = $('#fResetInline');
+      if (ri) ri.addEventListener('click', () => { this.resetState(); this.render(); });
+      $$('#payTableHost .payAct').forEach(b => b.addEventListener('click', () => {
+        const rec = Store.payments().find(x => x.id === b.dataset.id);
+        if (!rec) return;
+        const acts = {
+          view: () => this.viewOne(rec), edit: () => this.openEdit(rec), pdf: () => this.exportPdf(rec),
+          dup: () => this.duplicate(rec), del: () => this.confirmDelete(rec)
+        };
+        (acts[b.dataset.act] || acts.view)();
+      }));
+    },
+
+    /* ── Row actions ────────────────────────────────────────── */
+    viewOne(p) {
+      const proj = Store.project(p.projectId);
+      const row = (k, v) => `<div><dt>${k}</dt><dd>${v}</dd></div>`;
+      App.modal({
+        title: 'Invoice ' + (p.invoiceNo || ''),
+        body: `<dl class="deflist">
+          ${row('Project', proj ? esc(proj.name) : '—')}
+          ${row('Client', esc(p.client || '—'))}
+          ${row('Invoice date', p.invoiceDate ? shortDate(p.invoiceDate) : '—')}
+          ${row('Due date', p.dueDate ? shortDate(p.dueDate) : '—')}
+          ${row('Amount', money(p.amount))}
+          ${row('GST', p.gst ? p.gst + '% · ' + money(gstAmt(p)) : '—')}
+          ${row('Total', '<b>' + money(grossAmt(p)) + '</b>')}
+          ${row('Method', esc(p.method || '—'))}
+          ${row('Reference', esc(p.refNo || '—'))}
+          ${row('Status', payStatusPill(p.status))}
+          ${p.remarks ? row('Remarks', esc(p.remarks)) : ''}
+        </dl>`,
+        footer: `<button class="btn btn--ghost" data-close>Close</button><button class="btn btn--accent" id="vEdit"><i class="fa-solid fa-pen"></i> Edit</button>`
+      });
+      $('#vEdit').addEventListener('click', () => { App.closeModal(); this.openEdit(p); });
+    },
+
+    duplicate(p) {
+      const copy = Object.assign({}, p, {
+        id: genId('pay'),
+        invoiceNo: (p.invoiceNo || 'INV') + '-COPY',
+        invoiceDate: new Date().toISOString().slice(0, 10),
+        dueDate: '', status: 'Pending', refNo: ''
+      });
+      Store.addPayment(copy);
+      App.buildSearchIndex();
+      this.render();
+      App.toast('Invoice duplicated', copy.invoiceNo + ' created as Pending', 'good');
+    },
+
+    confirmDelete(p) {
+      App.modal({
+        title: 'Delete invoice',
+        body: `<p style="font-size:14px;line-height:1.6;margin:0">Delete <b>${esc(p.invoiceNo || 'this invoice')}</b> for ${money(grossAmt(p))}? This cannot be undone.</p>`,
+        footer: `<button class="btn btn--ghost" data-close>Cancel</button><button class="btn btn--accent" id="delYes" style="background:var(--warn);border-color:var(--warn)"><i class="fa-solid fa-trash"></i> Delete</button>`
+      });
+      $('#delYes').addEventListener('click', () => {
+        Store.deletePayment(p.id);
+        App.closeModal(); App.buildSearchIndex(); this.render();
+        App.toast('Invoice deleted', p.invoiceNo || '', 'warn');
+      });
+    },
+
+    /* Uses the browser print dialog → "Save as PDF". No PDF library is
+       bundled; adding one would be a large dependency for a page every
+       browser can already produce. */
+    exportPdf(p) {
+      const proj = Store.project(p.projectId);
+      let host = document.getElementById('printInvoice');
+      if (!host) { host = document.createElement('div'); host.id = 'printInvoice'; document.body.appendChild(host); }
+      host.innerHTML = `
+        <div class="inv">
+          <div class="inv__head">
+            <div><div class="inv__firm">${esc(D.meta.firm || 'InTandem Build')}</div>
+              <div class="inv__sub">${esc(D.meta.nature || '')}</div></div>
+            <div style="text-align:right"><div class="inv__label">Invoice</div><div class="inv__no">${esc(p.invoiceNo || '—')}</div></div>
+          </div>
+          <table class="inv__meta">
+            <tr><td>Project</td><td>${proj ? esc(proj.name) : '—'}</td><td>Invoice date</td><td>${p.invoiceDate ? shortDate(p.invoiceDate) : '—'}</td></tr>
+            <tr><td>Client</td><td>${esc(p.client || '—')}</td><td>Due date</td><td>${p.dueDate ? shortDate(p.dueDate) : '—'}</td></tr>
+            <tr><td>Method</td><td>${esc(p.method || '—')}</td><td>Reference</td><td>${esc(p.refNo || '—')}</td></tr>
+          </table>
+          <table class="inv__lines">
+            <tr><th>Description</th><th class="num">Amount</th></tr>
+            <tr><td>${esc(p.remarks || 'Professional services')}</td><td class="num">${money(p.amount)}</td></tr>
+            <tr><td>GST @ ${p.gst || 0}%</td><td class="num">${money(gstAmt(p))}</td></tr>
+            <tr class="inv__total"><td>Total</td><td class="num">${money(grossAmt(p))}</td></tr>
+          </table>
+          <p class="inv__foot">Status: ${esc(p.status)} · Generated ${shortDate(new Date().toISOString().slice(0, 10))}</p>
+        </div>`;
+      document.body.classList.add('printing-invoice');
+      const done = () => { document.body.classList.remove('printing-invoice'); window.removeEventListener('afterprint', done); };
+      window.addEventListener('afterprint', done);
+      window.print();
+      setTimeout(done, 1200);
+    },
+
     _empty() {
       return `<div class="card"><div class="dt__empty" style="padding:3rem 1rem">
         <i class="fa-solid fa-file-invoice-dollar" style="font-size:30px;opacity:.35"></i>

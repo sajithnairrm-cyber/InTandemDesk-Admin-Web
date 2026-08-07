@@ -319,13 +319,20 @@ window.App = (function () {
   const mounted = new Set();
   /* 'schedule' is deliberately absent — a schedule belongs to a project,
      not to the application, and lives at #/projects/<id>?tab=schedule. */
-  const ROUTES = ['dashboard', 'projects', 'budget', 'payments', 'vendors', 'ledger', 'staff', 'reports', 'news', 'settings'];
+  const ROUTES = ['dashboard', 'projects', 'payments', 'vendors', 'ledger', 'staff', 'reports', 'news', 'settings'];
   function register(route, mod) { modules[route] = mod; }
+
+  /* Routes that moved into a project. A bookmark or an old link lands
+     somewhere sensible instead of silently falling through to the
+     dashboard. Budget now lives at Projects → project → Budget, the same
+     way Schedule already does. */
+  const MOVED = { budget: 'projects' };
 
   function parts() {
     const full = location.hash.replace(/^#\/?/, '') || 'dashboard';
     const [path, qs] = full.split('?');
-    const [base, ...rest] = path.split('/');
+    let [base, ...rest] = path.split('/');
+    if (MOVED[base]) { base = MOVED[base]; rest = []; }
     const query = {};
     (qs || '').split('&').filter(Boolean).forEach(kv => { const [k, v] = kv.split('='); query[k] = decodeURIComponent(v || ''); });
     return { base: ROUTES.includes(base) ? base : 'dashboard', param: rest.join('/') || null, query };
@@ -411,7 +418,11 @@ window.App = (function () {
     });
     Store.payments().forEach(p => searchIndex.push({ group: 'Payments', icon: 'fa-indian-rupee-sign', label: (p.invoiceNo || 'Invoice') + ' · ₹' + inr.format(p.amount), sub: p.client || 'payment', route: '#/payments' }));
     Derive.vendorsRich.forEach(v => searchIndex.push({ group: 'Vendors', icon: 'fa-building', label: v.account, sub: v.vendor || 'vendor', route: '#/vendors/' + v.sino }));
-    D.budget.forEach(b => searchIndex.push({ group: 'Budget', icon: 'fa-list-check', label: b.description, sub: b.nature || 'budget line', route: '#/budget' }));
+    /* Budget moved inside a project. Point hits at the first project's
+       Budget tab; with no projects, the Projects list is the honest
+       destination rather than a route that no longer exists. */
+    const budgetRoute = (() => { const p = Store.projects()[0]; return p ? '#/projects/' + p.id + '?tab=budget' : '#/projects'; })();
+    D.budget.forEach(b => searchIndex.push({ group: 'Budget', icon: 'fa-list-check', label: b.description, sub: b.nature || 'budget line', route: budgetRoute }));
     /* Work items resolve to the schedule tab of the project that owns
        them, so search never lands on a page that no longer exists. */
     Store.projects().forEach(p => Store.schedule(p.id).forEach(t => searchIndex.push({

@@ -757,3 +757,52 @@ table.dt .strong{color:var(--ink); font-weight:600}
   .cmdk__t{max-width:100%}
   .cmdk__h{display:none}
 }
+
+/* ============================================================
+   Invoice filter toolbar · tall tables · printable invoice
+   New components only — nothing above this line is changed.
+   Built from existing tokens so it reads as native.
+   ============================================================ */
+
+/* Advanced filter grid — collapses to one column on small screens */
+.filterbar{display:grid; gap:.7rem 1rem;
+  grid-template-columns:repeat(auto-fit, minmax(190px, 1fr))}
+.filterbar .field{margin-bottom:0}
+
+/* A table that scrolls vertically so the sticky header actually sticks.
+   table.dt thead th is already position:sticky; it needs a scroll
+   container with a bounded height to have anything to stick to. */
+.tablewrap--tall{max-height:min(68vh, 720px); overflow-y:auto}
+
+/* Row action buttons: right-aligned, tight, and only fully opaque on
+   hover so a long table does not read as a wall of icons. */
+td.rowacts{white-space:nowrap; text-align:right}
+td.rowacts .iconbtn{width:28px; height:28px; font-size:12px; opacity:.55; transition:opacity .15s}
+tr:hover td.rowacts .iconbtn,td.rowacts .iconbtn:focus-visible{opacity:1}
+
+/* ── Printable invoice ──────────────────────────────────────
+   Hidden on screen. When .printing-invoice is on <body> the app is
+   hidden and only this prints, so the browser's "Save as PDF" makes
+   a clean one-page invoice. */
+#printInvoice{display:none}
+@media print{
+  body.printing-invoice>*{display:none !important}
+  body.printing-invoice #printInvoice{display:block !important}
+  .inv{font-family:var(--body); color:#111; padding:8mm}
+  .inv__head{display:flex; justify-content:space-between; align-items:flex-start;
+    border-bottom:2px solid #111; padding-bottom:10px; margin-bottom:16px}
+  .inv__firm{font-family:var(--display); font-size:20px; font-weight:800}
+  .inv__sub{font-size:11px; color:#555; margin-top:2px}
+  .inv__label{font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#555}
+  .inv__no{font-family:var(--mono); font-size:16px; font-weight:700}
+  .inv__meta{width:100%; border-collapse:collapse; margin-bottom:18px; font-size:12px}
+  .inv__meta td{padding:4px 8px 4px 0}
+  .inv__meta td:nth-child(odd){color:#555; width:90px}
+  .inv__lines{width:100%; border-collapse:collapse; font-size:13px}
+  .inv__lines th{text-align:left; border-bottom:1px solid #111; padding:6px 0; font-size:10px;
+    letter-spacing:.08em; text-transform:uppercase}
+  .inv__lines td{padding:8px 0; border-bottom:1px solid #ddd}
+  .inv__lines .num{text-align:right; font-family:var(--mono)}
+  .inv__total td{font-weight:700; border-bottom:2px solid #111; font-size:15px}
+  .inv__foot{margin-top:20px; font-size:11px; color:#555}
+}

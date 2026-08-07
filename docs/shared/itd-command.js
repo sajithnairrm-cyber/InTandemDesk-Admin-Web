@@ -220,7 +220,9 @@
   const NAV = [
     ['dashboard', 'fa-gauge-high', 'Office overview'],
     ['projects', 'fa-diagram-project', 'All projects'],
-    ['budget', 'fa-sack-dollar', 'Project budget'],
+    /* Budget is no longer a top-level route — it is a tab inside a
+       project, like Schedule. Removed from the palette so it cannot
+       navigate somewhere that redirects. */
     ['payments', 'fa-file-invoice-dollar', 'Client payments'],
     ['vendors', 'fa-building', 'Vendor accounts'],
     ['ledger', 'fa-receipt', 'Payment ledger'],
