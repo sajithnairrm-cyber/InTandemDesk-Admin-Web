@@ -2,11 +2,16 @@
 /* ============================================================
    InTandem Desk — build (single app)
 
-     node build.mjs             build into public/
+     node build.mjs             build into docs/
      node build.mjs --preview   allow a placeholder Firebase config
 
    No bundler, no dependencies. Copies src/app/ and src/shared/
-   into public/, so the deployed tree is self-contained.
+   into docs/, so the deployed tree is self-contained.
+
+   docs/ is the ONE published artifact: GitHub Pages serves main:/docs,
+   and firebase.json points hosting there too. Both hosts therefore serve
+   byte-identical files. If those two ever disagree the build refuses to
+   run — see the hosting-root check below.
 
    The build FAILS while src/shared/itd-config.js still holds
    PASTE_ placeholders — an unconfigured build has no working
@@ -89,6 +94,39 @@ const prune = (dir, prefix) => {
   }
 };
 if (fs.existsSync(OUT)) prune(OUT, '');
+
+/* Hosting root check.
+
+   The bug this exists to prevent: the build output moved to docs/ while
+   firebase.json still deployed public/. Both commands kept reporting
+   success and Firebase served a days-old tree, because nothing had
+   written public/ since the move and .gitignore hid the drift.
+
+   A mismatch is always a config error, never a valid state, so fail
+   here rather than let `npm run deploy` (build && firebase deploy) hand
+   the CLI a directory this build does not produce. */
+const fbConfig = path.join(ROOT, 'firebase.json');
+if (fs.existsSync(fbConfig)) {
+  /* Strip a leading BOM — a Windows editor can add one, and JSON.parse
+     rejects it with a stack trace that says nothing about hosting. */
+  const raw = fs.readFileSync(fbConfig, 'utf8').replace(/^\uFEFF/, '');
+  const hosting = JSON.parse(raw).hosting ?? [];
+  const want = path.relative(ROOT, OUT).replace(/\\/g, '/');
+  for (const site of [hosting].flat()) {
+    if (!site?.public || path.resolve(ROOT, site.public) === OUT) continue;
+    console.error(`
+  ✖ firebase.json does not point at the build output.
+
+    build.mjs writes        ${want}/
+    hosting${site.target ? ` "${site.target}"` : ''} serves    ${site.public}/
+
+    Deploying would publish a stale directory rather than this build.
+
+    Fix:  set "public": "${want}" in firebase.json
+`);
+    process.exit(1);
+  }
+}
 
 console.log(`\n  InTandem Desk · Admin Web${preview ? '  (preview)' : ''}`);
 console.log(`  ${app} app + ${shared} shared files → docs/${pruned ? `  (${pruned} stale removed)` : ''}\n`);

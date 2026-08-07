@@ -5,7 +5,7 @@
   "hosting": [
     {
       "target": "web",
-      "public": "public",
+      "public": "docs",
       "ignore": [
         "firebase.json",
         "**/.*",
